@@ -1,148 +1,116 @@
 # pc-assistant 安装指南
 
-PC 桌面自动化助理。基于微软 UFO² 框架，将"用电脑操作XXX"等自然语言指令，在 Windows 桌面上自动完成 UI 操作（打开应用/点击/输入/读取信息等）。
+在 **任意 Windows 10/11** 机器上，从本仓库安装 PC 桌面自动化运行时。
 
 ---
 
-## 依赖总览
+## 依赖
 
-| 依赖 | 来源 | 用途 |
-|------|------|------|
-| **UFO²（已魔改）** | 本仓库 `tools/ufo2/`（已包含完整魔改源码，无需额外下载） | 桌面自动化框架 |
-| **Python 3.11** | [python.org](https://www.python.org/) 或 ComfyUI 自带的嵌入式 Python | 运行 UFO² |
-| **火山引擎 API** | [volcengine.com](https://www.volcengine.com/) | 驱动 LLM 视觉模型 |
+| 依赖 | 说明 |
+|------|------|
+| Windows 10/11 | UFO² 依赖 UI Automation |
+| Python **3.11** | 推荐；装机时勾选 Add to PATH |
+| 本仓库 `tools/ufo2/` | 已含魔改 UFO²，无需再 clone 上游 |
+| 多模态 LLM API | 默认火山引擎 Doubao（OpenAI 兼容协议） |
 
 ---
 
-## 安装步骤
+## 一键安装（推荐）
 
-### 1. 安装 Python 3.11
+> ⚠️ 首次运行 PowerShell 脚本遇到执行策略报错？
+> ```powershell
+> Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+> ```
 
-UFO² 推荐 Python 3.11。从 [python.org](https://www.python.org/downloads/) 下载安装。
-
-**安装时务必勾选 "Add Python to PATH"。**
-
-验证：
-
-```powershell
-python --version
-# 预期输出：Python 3.11.x
-```
-
-> **小提示**：如果你装了 ComfyUI，可以直接用它的嵌入式 Python，路径类似 `F:\ComfyUI_windows\python_embeded\python.exe`
-
-### 2. 克隆本仓库（UFO² 已包含在内）
+在仓库根目录：
 
 ```powershell
 git clone https://github.com/lindakun/omy-skills.git
 cd omy-skills
+
+# 将 key 换成你的火山引擎方舟 API Key
+.\scripts\install-pc.ps1 -ApiKey "ark-xxxxxxxx"
 ```
 
-UFO² 魔改版源码就在 `tools/ufo2/` 目录下，**不需要再从 GitHub 重新 clone UFO²**，也不用打补丁。
+脚本会：
 
-### 3. 创建虚拟环境并安装依赖
+1. 定位仓库根并设置用户环境变量 `OMY_SKILLS_ROOT`
+2. 在 `tools/ufo2` 创建 `venv` 并 `pip install -r requirements.txt`
+3. 把 API Key 写入本地 `tools/ufo2/config/ufo/agents.yaml`（**请勿 commit 该文件若含真实 Key**）
 
-**推荐布局（与 `SKILL.md` 优先级 2 一致）**：venv 建在仓库 `tools/ufo2` 内。
+也可先设环境变量再安装：
+
+```powershell
+$env:VOLC_ARK_API_KEY = "ark-xxxxxxxx"
+.\scripts\install-pc.ps1
+```
+
+---
+
+## 手动安装
+
+### 1. Python 3.11
+
+```powershell
+python --version   # 期望 3.11.x
+```
+
+### 2. 虚拟环境与依赖
 
 ```powershell
 cd tools\ufo2
-
-# 创建虚拟环境（推荐在 ufo2 目录内）
 python -m venv venv
-
-# 激活虚拟环境
-venv\Scripts\activate
-
-# 安装依赖
+.\venv\Scripts\Activate.ps1
+pip install -U pip
 pip install -r requirements.txt
 ```
 
-> 安装可能需要几分钟，请耐心等待。
+### 3. 配置 API Key
 
-#### 可选：本机独立运行目录（优先级 3）
+编辑 `tools/ufo2/config/ufo/agents.yaml`，将所有 `YOUR_VOLC_ARK_API_KEY` 替换为真实 Key。  
+四个 agent（`HOST_AGENT` / `APP_AGENT` / `EVALUATION_AGENT` / `BACKUP_AGENT`）都需要有效 Key。
 
-若你更希望源码/venv 放在仓库外（例如本机历史路径 `D:\tools\ufo2` + `D:\tools\ufo_venv`）：
+获取 Key：[火山引擎方舟控制台](https://console.volcengine.com/ark/)
 
-1. 将 `tools\ufo2` 复制或 junction 到 `D:\tools\ufo2`
-2. 在 `D:\tools` 创建 `ufo_venv` 并 `pip install -r D:\tools\ufo2\requirements.txt`
-3. **仅在该运行目录**写入真实 API Key（不要写回 git 跟踪的仓库文件）
-
-`SKILL.md` 会按 **环境变量 → 仓库路径 → D:\tools 回退** 解析 `UFO_ROOT` / `UFO_PYTHON`。改仓库代码后若仍走 D 盘副本，需自行同步，否则看不到改动。
-
-### 4. 配置 API Key
-
-UFO² 依赖多模态视觉模型，当前使用**火山引擎 Doubao Lite**。
-
-1. 打开 **你实际运行的** `UFO_ROOT\config\ufo\agents.yaml`（仓库内默认为占位符）
-2. 将文件中所有 `YOUR_VOLC_ARK_API_KEY` 替换为你的真实 API Key
-3. **切勿**把含真实 Key 的 `agents.yaml` 提交到 git（仓库只保留占位符）
-
-配置文件格式示例：
-
-```yaml
-HOST_AGENT:
-  API_TYPE: "openai"
-  API_BASE: "https://ark.cn-beijing.volces.com/api/v3"
-  API_KEY: "YOUR_VOLC_ARK_API_KEY"  # ← 在这里填入你的 Key
-  API_MODEL: "doubao-seed-2-0-lite-260428"
-```
-
-> **如何获取火山引擎 API Key？**
-> 1. 访问 [火山引擎方舟平台](https://console.volcengine.com/ark/)
-> 2. 创建接入点，选择 Doubao 系列模型
-> 3. 获取 API Key（格式为 `ark-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx-xxxxx`）
-
-### 5. 验证环境
+### 4. 环境变量
 
 ```powershell
-# 确保虚拟环境已激活
-venv\Scripts\activate
+$env:OMY_SKILLS_ROOT = "C:\path\to\omy-skills"   # 改成你的实际路径
+# 可选覆盖：
+# $env:UFO_ROOT = "$env:OMY_SKILLS_ROOT\tools\ufo2"
+# $env:UFO_PYTHON = "$env:UFO_ROOT\venv\Scripts\python.exe"
+```
 
-# 运行一个简单测试任务
+### 5. 冒烟测试
+
+```powershell
+cd tools\ufo2
+.\venv\Scripts\Activate.ps1
 python -m ufo --task "pc-test" -r "Step 1: Open Notepad, type 'Hello UFO', wait 2 seconds, then close it."
 ```
 
-预期效果：系统会自动打开记事本 → 输入文字 → 等待后关闭。
+### 6. 注册技能
+
+把 `skills/pc-assistant` 提供给 Agent（复制到技能目录或配置技能路径），确保 Agent 能加载 `SKILL.md`。
 
 ---
 
 ## 故障排查
 
-| 问题 | 解决方案 |
-|------|---------|
-| 启动时报 AAD 认证错误 | `agents.yaml` 中缺少 `EVALUATION_AGENT` 或 `BACKUP_AGENT` 配置。本仓库已配齐这 4 个 agent |
-| 微信中 `set_edit_text` 失败 | 微信使用自定义 Win32 控件，无法直接输入文字。需使用剪贴板方案（见 SKILL.md 中的微信工作流） |
-| 安全防护弹框 | 本魔改版已将 `SAFE_GUARD` 设为 `False`，减少了弹框，但系统级安全提示仍需人工确认 |
-| API 调用超时 | 检查 API Key 是否有效、网络是否可访问 `ark.cn-beijing.volces.com` |
-| `pip install -r requirements.txt` 报错 | 确认使用 Python 3.11（非 3.12/3.13），部分依赖可能不兼容更高版本 |
-| 改了仓库但行为不变 | 实际可能跑在 `D:\tools\ufo2`；检查 `SKILL.md` 路径优先级，或同步两边目录 |
+| 问题 | 处理 |
+|------|------|
+| AAD 认证错误 | 检查 `agents.yaml` 是否四 agent 齐全且 Key 非占位符 |
+| 微信无法输入 | 使用 SKILL 中的剪贴板 + Ctrl+V 流程 |
+| `pip install` 失败 | 确认 Python 3.11；必要时换镜像源 |
+| 找不到 UFO | 设置 `OMY_SKILLS_ROOT` 指向本仓库根 |
+| API 超时 | 检查 Key、网络与 `ark.cn-beijing.volces.com` 连通性 |
 
 ---
 
-## 关于魔改
+## 魔改说明
 
-本仓库中的 UFO² 基于 [microsoft/UFO](https://github.com/microsoft/UFO) 开源项目。完整魔改清单见：
+相对 [microsoft/UFO](https://github.com/microsoft/UFO) 的改动见：
 
-**[`tools/ufo2/MODIFICATIONS.md`](../../tools/ufo2/MODIFICATIONS.md)**
+[`tools/ufo2/MODIFICATIONS.md`](../../tools/ufo2/MODIFICATIONS.md)
 
-摘要：
-
-| 修改文件 | 改动内容 |
-|---------|---------|
-| `config/ufo/system.yaml` | 优化超参：MAX_TOKENS=1000, SLEEP_TIME=0.3, SAFE_GUARD=False 等，大幅提升执行速度 |
-| `config/ufo/agents.yaml` | 配齐 HOST/APP/EVALUATION/BACKUP 四个 agent 模板，火山引擎 Doubao Lite（Key 为占位符） |
-| `requirements.txt` | numpy/pandas 版本放宽为 `>=`，避免版本冲突 |
-| `ufo/client/mcp/local_servers/cli_mcp_server.py` | 添加 `python`/`powershell` 到白名单；`run_shell` 支持同步等待并返回输出 |
-| `ufo/client/mcp/local_servers/ui_mcp_server.py` | control_dict 为空时自动刷新控件列表，增加容错性 |
-| `ufo/agents/processors/...` + `context.py` | 新增 `[verify]`/`[no-verify]` 机制，确定性步骤跳过截图+LLM 验证，每步省约 25 秒 |
-| `ufo/prompts/share/base/host_agent.yaml` | 提示词中追加 `needs_verification` 字段说明 |
-| `scripts/set_clipboard.py` | 新增剪贴板写入脚本（详见下方） |
-
-### set_clipboard.py 说明
-
-微信等应用自定义 Win32 控件会导致 UFO² 的 `set_edit_text` 全部失败。解决方案是通过剪贴板中转：
-
-1. 用 `python scripts/set_clipboard.py "要发送的文字"` 将文本写入 Windows 剪贴板
-2. 在目标应用中用 Ctrl+V 粘贴
-
-该脚本已包含在 `tools/ufo2/scripts/` 中。
+主要包括：性能参数、`[no-verify]`、微信剪贴板脚本、火山引擎配置模板、CLI 白名单等。

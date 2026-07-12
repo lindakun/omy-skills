@@ -48,9 +48,14 @@ _models:
       api_key: YOUR_LONGCAT_API_KEY  # TODO: 替换为你的 LongCat API Key
 
 # ==== 设备预配置 ====
+# serial 请改成 `adb devices` 输出中的设备号；模拟器用 emulator-5554
 _devices:
   android_emulator: &android_emulator
     serial: emulator-5554
+    platform: android
+    auto_setup: true
+  android_usb: &android_usb
+    serial: YOUR_ADB_SERIAL  # TODO: 替换为真机序列号，例如 R5CTxxxx
     platform: android
     auto_setup: true
 
@@ -58,17 +63,18 @@ _devices:
 # 当前使用的模型 - 修改下面两行来切换
 # 视觉模型可选：*doubao_turbo | *doubao_lite | *gpt4o | *deepseek | *qwen
 # 文本模型可选：*longcat | *doubao_turbo | *doubao_lite | *gpt4o | *deepseek | *qwen
+# 若未配置 LongCat，可将 _active_text_model 改为 *doubao_lite
 # ===============================================================
 _active_vision_model: &active_vision_model
   <<: *doubao_lite
 _active_text_model: &active_text_model
-  <<: *longcat
+  <<: *doubao_lite
 
 # ================================================================
-# 当前使用的设备 - Windows 默认 Android
+# 当前使用的设备：*android_usb（真机）或 *android_emulator（模拟器）
 # ===============================================================
 _active_device: &active_device
-  <<: *android_emulator
+  <<: *android_usb
 
 agent:
   max_steps: 30
@@ -123,7 +129,7 @@ logging:
   debug: false
   save_trajectory: none
   trajectory_path: trajectories
-  trajectory_gifs: true
+  trajectory_gifs: false
   rich_text: false
 tools:
   disabled_tools: null

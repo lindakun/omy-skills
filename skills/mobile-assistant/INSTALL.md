@@ -1,169 +1,147 @@
 # mobile-assistant 安装指南
 
-手机自动化助理。将"帮我用手机打开B站搜索XX"这类自然语言指令，改写为 mobilerun goal 提示词，在 Android 设备上自动执行。
+在任意 **Windows 主机 + Android 手机** 上安装手机自动化技能依赖。
+
+本技能调用开源 [mobilerun](https://github.com/droidrun/mobilerun)，**不依赖**任何作者私有仓库或本机绝对路径。
 
 ---
 
 ## 依赖总览
 
-| 依赖 | 来源 | 用途 |
-|------|------|------|
-| **mobilerun** | [droidrun/mobilerun](https://github.com/droidrun/mobilerun)（GitHub 开源，源码无修改） | Android 自动化核心引擎 |
-| **Python 3.11~3.13** | [python.org](https://www.python.org/) | 运行 mobilerun |
-| **ADB** | [Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools) | 连接 Android 设备 |
-| **Android 手机** | — | 执行端，需开启 USB 调试 |
-| **配置文件** | 本仓库 `tools/mobilerun/config_multi_windows.yaml`（已含配置模板） | mobilerun 的模型和设备配置 |
-| **API Key（火山引擎）** | [volcengine.com](https://console.volcengine.com/ark/) | 驱动视觉/文本模型 |
-| **API Key（LongCat）** | [longcat.chat](https://longcat.chat) | 驱动文本模型（可选，可换其他） |
+| 依赖 | 用途 |
+|------|------|
+| Python 3.11 ~ 3.13 | 运行 mobilerun |
+| [ADB Platform Tools](https://developer.android.com/tools/releases/platform-tools) | 连接手机 |
+| Android 手机 + USB 调试 | 执行端 |
+| [mobilerun](https://github.com/droidrun/mobilerun) | 自动化引擎 |
+| 本仓库 `tools/mobilerun/*.yaml` | 模型/设备配置模板 |
+| 多模态 LLM API | 默认火山引擎 Doubao |
 
 ---
 
 ## 安装步骤
 
-### 1. 安装 Python
+> ⚠️ 首次运行 PowerShell 脚本遇到执行策略报错？
+> ```powershell
+> Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+> ```
 
-从 [python.org](https://www.python.org/downloads/) 下载 Python 3.11 ~ 3.13 并安装。
+### 1. 克隆本仓库并设置根路径
 
-**安装时务必勾选 "Add Python to PATH"。**
+```powershell
+git clone https://github.com/lindakun/omy-skills.git
+cd omy-skills
+$env:OMY_SKILLS_ROOT = (Resolve-Path .).Path
+```
 
-验证：
+### 2. Python
+
+安装 3.11~3.13，勾选 Add to PATH。
 
 ```powershell
 python --version
-# 预期输出：Python 3.11.x / 3.12.x / 3.13.x
 ```
 
-### 2. 安装 ADB
+### 3. ADB
 
-1. 下载 [Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools)
-2. 解压到 `C:\Users\<你的用户名>\platform-tools\`
-3. 将 `platform-tools` 目录添加到系统 PATH：
-   - Win + R → `sysdm.cpl` → 高级 → 环境变量
-   - 在「用户变量」中找到 `Path`，双击编辑
-   - 新增一条：`C:\Users\<你的用户名>\platform-tools`
-   - 确定保存
-
-验证：
+1. 下载 Platform Tools 并解压到任意目录（例如 `%LOCALAPPDATA%\Android\platform-tools`）
+2. 将该目录加入用户 PATH
+3. 验证：
 
 ```powershell
 adb version
-# 预期输出：Android Debug Bridge version 1.0.41
 ```
 
-### 3. 手机端设置
+### 4. 手机
 
-1. 打开手机「设置」→「关于手机」→ 连续点击「版本号」7 次，开启**开发者选项**
-2. 进入「设置」→「开发者选项」→ 开启 **USB 调试**
-3. 用 USB 线连接手机到电脑
-4. 手机上会弹出「允许 USB 调试」对话框，勾选「始终允许」并点击「确定」
-
-验证连接：
+1. 开发者选项 → 开启 **USB 调试**
+2. USB 连接电脑并授权
+3. 验证：
 
 ```powershell
 adb devices
-# 预期输出：
-# List of devices attached
-# PBV0216914011984    device
+# 应出现 <serial>    device
 ```
 
-> **注意**：状态必须显示 `device`，如果显示 `unauthorized` 表示手机上还没有授权。
-
-### 4. 安装 mobilerun
+### 5. 安装 mobilerun
 
 ```powershell
-# 克隆仓库
 git clone https://github.com/droidrun/mobilerun.git
 cd mobilerun
-
-# 以开发模式安装 Python 包
 pip install -e .
-
-# 安装 Portal APK 到手机
 mobilerun setup
-```
-
-> `mobilerun setup` 会自动下载并安装 Mobilerun Portal APK 到手机上，并启用无障碍服务。
-
-验证安装：
-
-```powershell
 mobilerun ping
-# 应该看到 Portal 已安装且可访问的确认信息
 ```
 
-### 5. 部署配置文件
-
-本仓库 `tools/mobilerun/` 已附带配置模板 `config_multi_windows.yaml`，将其复制到 mobilerun 目录：
+建议设置：
 
 ```powershell
-# 从本仓库复制配置模板到 mobilerun 目录
-copy G:\github_pj\omy-skills\tools\mobilerun\config_multi_windows.yaml D:\tools\mobilerun\
-```
-> 如果你习惯把 mobilerun 放在其他地方，把路径调整一下即可。
-
-### 6. 配置 API Key
-
-编辑 `config_multi_windows.yaml`，你需要替换以下 API Key：
-
-#### 必填：火山引擎 Key（驱动视觉模型）
-
-```yaml
-doubao_lite: &doubao_lite
-  ...
-  kwargs:
-    api_key: YOUR_VOLC_ARK_API_KEY  # ← 在这里填入你的 Key
+$env:MOBILERUN_HOME = "C:\path\to\mobilerun"   # 你的实际 clone 路径
 ```
 
-> **如何获取？**
-> 1. 访问 [火山引擎方舟平台](https://console.volcengine.com/ark/)
-> 2. 创建接入点，选择 Doubao 系列模型（推荐 `doubao-seed-2-0-lite-260428`）
-> 3. 获取 API Key（格式：`ark-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx-xxxxx`）
+### 6. 生成本地配置（推荐脚本）
 
-#### 可选：LongCat Key（驱动文本模型）
-
-```yaml
-longcat: &longcat
-  ...
-  kwargs:
-    api_key: YOUR_LONGCAT_API_KEY  # ← 在这里填入你的 Key
-```
-
-> 如果不使用 LongCat，可以把 `_active_text_model` 指向其他模型（如 `*doubao_turbo`）。
-
-#### 其他服务商（可选）
-
-配置文件中还预置了以下模型的占位符，按需启用即可：
-
-| 模型 | 用途 | 配置位置 |
-|------|------|---------|
-| 火山引擎 Doubao Turbo | 视觉/文本 | `doubao_turbo` |
-| OpenAI GPT-4o mini | 视觉/文本 | `gpt4o` |
-| DeepSeek Chat | 文本 | `deepseek` |
-| 通义千问 Plus | 文本 | `qwen` |
-
-> **提示**：切换模型只需改 `_active_vision_model` 和 `_active_text_model` 两行中的 `<<: *模型名` 即可。
-
-### 7. 验证全链路
+回到 **omy-skills** 仓库根：
 
 ```powershell
-# 检查手机连接
+# 将 serial 换成 adb devices 里的设备号；模拟器可省略 -DeviceSerial
+.\scripts\install-mobile.ps1 `
+  -ApiKey "ark-xxxxxxxx" `
+  -MobilerunHome $env:MOBILERUN_HOME `
+  -DeviceSerial "你的设备序列号"
+```
+
+脚本会：
+
+- 从模板生成 `tools/mobilerun/config.local.yaml`
+- 写入 API Key（若提供）
+- 设置用户环境变量 `MOBILERUN_CONFIG`（以及可选的 `MOBILERUN_HOME`）
+- 若提供了 `MobilerunHome`，同步一份配置到该目录
+
+**请勿**将含真实 Key 的 `config.local.yaml` 提交到 git。
+
+### 7. 手动配置（可选）
+
+```powershell
+copy tools\mobilerun\config_multi_windows.yaml tools\mobilerun\config.local.yaml
+# 编辑 config.local.yaml：替换 YOUR_VOLC_ARK_API_KEY，并设置 device serial
+```
+
+设备段说明：
+
+- 模拟器：可使用模板中的 `android_emulator`（默认 serial `emulator-5554`）
+- 真机：在配置中把 serial 改成 `adb devices` 显示的序列号
+
+### 8. 验证
+
+```powershell
 adb devices
-
-# 检查 Portal 状态
 mobilerun ping
-
-# 运行一个简单示例
 mobilerun run "打开设置查看Android版本"
 ```
+
+### 9. 注册技能
+
+将 `skills/mobile-assistant` 提供给 Agent，保证能加载 `SKILL.md`。
 
 ---
 
 ## 故障排查
 
-| 问题 | 解决方案 |
-|------|---------|
-| `adb devices` 显示 `unauthorized` | 手机上重新点击「允许 USB 调试」，必要时撤销授权后重插 USB |
-| `mobilerun ping` 失败 | 确保 Portal APK 已安装，无障碍服务已开启 |
-| 运行时提示模型 API 不可用 | 检查配置文件中的 API Key 是否有效 |
-| `pip install -e .` 报错 | 确认 Python 版本 3.11~3.13，不要使用 3.14+ |
-| 手机连接后 `device` 状态闪烁 | 换一根 USB 数据线，部分充电线不支持数据传输 |
+| 问题 | 处理 |
+|------|------|
+| `unauthorized` | 手机上重新授权 USB 调试 |
+| `mobilerun ping` 失败 | 重新 `mobilerun setup`，检查无障碍/Portal |
+| API 不可用 | 检查 `config.local.yaml` 中 Key 与网络 |
+| 找不到配置 | 设置 `MOBILERUN_CONFIG` 或 `OMY_SKILLS_ROOT` |
+| 真机无响应 | 确认 serial 与 `adb devices` 一致，数据线支持数据传输 |
+
+---
+
+## 与 pc-assistant 的关系
+
+| | mobile-assistant | pc-assistant |
+|--|------------------|--------------|
+| 执行端 | Android | Windows 桌面 |
+| 引擎 | mobilerun（外置安装） | 本仓库 `tools/ufo2` |
+| 安装脚本 | `scripts/install-mobile.ps1` | `scripts/install-pc.ps1` |

@@ -29,6 +29,6 @@ logs/
 .env.*
 *.local.yaml
 agents.local.yaml
-tools/ufo2/venv/
-tools/ufo2/logs/
-tools/ufo2/config/ufo/agents.yaml.local
+
+# WorkBuddy workspace memory
+.workbuddy/memory/

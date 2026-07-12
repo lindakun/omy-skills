@@ -85,20 +85,20 @@
 
 ---
 
-## 与本机 `D:\tools\ufo2` 的关系
+## 在本仓库中的位置
 
-| 位置 | 角色 |
+| 路径 | 角色 |
 |------|------|
-| 仓库 `tools/ufo2` | **版本源**（git 跟踪；Key 占位） |
-| `D:\tools\ufo2` + `D:\tools\ufo_venv` | 可选**运行副本**（可含真实 Key、logs；勿提交） |
+| `tools/ufo2` | pc-assistant 唯一推荐运行时（git 跟踪；API Key 为占位符） |
+| `tools/ufo2/venv` | 本地虚拟环境（gitignore，由 `scripts/install-pc.ps1` 创建） |
 
-关键魔改文件在两边应对齐（`system.yaml`、`cli_mcp_server.py`、`ui_mcp_server.py`、`set_clipboard.py`、processors 等）。路径解析顺序见 `skills/pc-assistant/SKILL.md`。
+路径约定见仓库根 `README.md` 与 `skills/pc-assistant/SKILL.md`（`OMY_SKILLS_ROOT` / `UFO_ROOT`）。
 
 ---
 
 ## 建议的上游同步方式
 
-1. 记录当前魔改文件列表（本文件）
+1. 以本文件为魔改清单
 2. 拉取 microsoft/UFO 新版本到临时目录
-3. 仅合并 `ufo/` 核心与 `config/`，再重放本清单中的补丁
-4. 跑一次记事本冒烟 + 微信剪贴板发送冒烟
+3. 合并 `ufo/` 核心与 `config/`，再重放本清单中的补丁
+4. 在干净 venv 中跑记事本冒烟 +（可选）微信剪贴板发送冒烟
