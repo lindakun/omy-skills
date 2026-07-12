@@ -8,13 +8,15 @@
 | 技能 | 说明 | 主机平台 | 执行端 | 运行时 |
 |------|------|----------|--------|--------|
 | [mobile-assistant](skills/mobile-assistant/) | 自然语言 → 手机操作 | **macOS / Windows / Linux** | Android | [mobilerun](https://github.com/droidrun/mobilerun)（外置）+ 本仓库配置模板 |
-| [pc-assistant](skills/pc-assistant/) | 自然语言 → 桌面 UI | **仅 Windows 10/11** | 本机桌面 | 本仓库 `tools/ufo2`（UFO² 魔改） |
+| [mac-assistant](skills/mac-assistant/) | 自然语言 → Mac 桌面 UI | **仅 macOS** | 本机桌面 | 本仓库 `tools/macrun`（薄运行时，AX 为主） |
+| [pc-assistant](skills/pc-assistant/) | 自然语言 → Windows 桌面 UI | **仅 Windows 10/11** | 本机桌面 | 本仓库 `tools/ufo2`（UFO² 魔改） |
 
 ## 安装入口
 
 | 技能 | macOS / Linux | Windows |
 |------|---------------|---------|
 | mobile | `./scripts/install-mobile.sh` | `.\scripts\install-mobile.ps1` |
+| mac | `./scripts/install-mac.sh` | 不适用 |
 | pc | 不适用 | `.\scripts\install-pc.ps1` |
 
 注册到本机 Agent 技能目录（可选）：
@@ -33,6 +35,7 @@
 |------|------|
 | `OMY_SKILLS_ROOT` | 本仓库根目录 |
 | `MOBILERUN_CONFIG` | mobile：仓库内 `tools/mobilerun/config.local.yaml`（推荐） |
+| `MACRUN_CONFIG` | mac：仓库内 `tools/macrun/config.local.yaml`（推荐） |
 | `VOLC_ARK_API_KEY` | 火山方舟 Key（安装脚本可注入本地配置） |
 | `UFO_ROOT` / `UFO_PYTHON` | pc-assistant 覆盖路径（Windows） |
 

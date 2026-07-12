@@ -17,7 +17,7 @@ metadata:
 - "用手机自动化..."
 - "手机帮我打开 XX APP..."
 
-涉及「电脑/桌面」操作时用 `pc-assistant`（仅 Windows），不要用本技能。
+涉及「电脑/桌面」操作时：macOS 用 `mac-assistant`，Windows 用 `pc-assistant`；不要用本技能。
 
 ## 路径与依赖解析（可移植）
 

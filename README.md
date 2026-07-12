@@ -1,6 +1,6 @@
 # omy-skills
 
-可复用的 **Agent 技能集**（Claude Code / Codex / WorkBuddy / OpenCode 等）：把自然语言变成 **Android 手机** 或 **Windows 桌面** 上的自动化操作。
+可复用的 **Agent 技能集**（Claude Code / Codex / WorkBuddy / OpenCode 等）：把自然语言变成 **Android 手机**、**Mac 桌面** 或 **Windows 桌面** 上的自动化操作。
 
 > 设计目标：`git clone` 后按平台安装指南配置 API Key 即可用，**不依赖作者本机路径**；密钥不入库。
 
@@ -9,6 +9,7 @@
 | 技能 | 说明 | 主机平台 | 本仓库自带 |
 |------|------|----------|------------|
 | [mobile-assistant](skills/mobile-assistant/) | 自然语言 → Android 自动化 | **macOS / Windows / Linux** | 配置模板（引擎 [mobilerun](https://github.com/droidrun/mobilerun)） |
+| [mac-assistant](skills/mac-assistant/) | 自然语言 → Mac 桌面 UI | **仅 macOS** | 薄运行时 `tools/macrun`（AX 为主，失败才截图） |
 | [pc-assistant](skills/pc-assistant/) | 自然语言 → Windows 桌面 UI | **仅 Windows 10/11** | 魔改 [UFO²](https://github.com/microsoft/UFO)（`tools/ufo2`） |
 
 更完整的目录说明见 [SKILLS.md](SKILLS.md)。
@@ -52,7 +53,19 @@ export MOBILERUN_CONFIG="$OMY_SKILLS_ROOT/tools/mobilerun/config.local.yaml"
 
 详见 [skills/mobile-assistant/INSTALL.md](skills/mobile-assistant/INSTALL.md)。
 
-### 2. PC 桌面技能（pc-assistant，仅 Windows）
+### 2. Mac 桌面技能（mac-assistant，仅 macOS）
+
+```bash
+chmod +x scripts/install-mac.sh
+./scripts/install-mac.sh --api-key "你的火山引擎API_Key"
+source tools/macrun/venv/bin/activate
+# 系统设置 → 隐私与安全性 → 辅助功能 + 屏幕录制 → 授权终端/Agent 宿主
+macrun doctor
+```
+
+详见 [skills/mac-assistant/INSTALL.md](skills/mac-assistant/INSTALL.md)。
+
+### 3. PC 桌面技能（pc-assistant，仅 Windows）
 
 ```powershell
 .\scripts\install-pc.ps1 -ApiKey "你的火山引擎API_Key"
@@ -60,7 +73,7 @@ export MOBILERUN_CONFIG="$OMY_SKILLS_ROOT/tools/mobilerun/config.local.yaml"
 
 详见 [skills/pc-assistant/INSTALL.md](skills/pc-assistant/INSTALL.md)。
 
-### 3. 接入 Agent
+### 4. 接入 Agent
 
 ```bash
 ./scripts/link-skills.sh          # macOS / Linux：链到已存在的 ~/.claude/skills 等
@@ -83,26 +96,20 @@ omy-skills/
 ├── scripts/
 │   ├── install-mobile.sh     # mobile：生成 config.local.yaml（macOS/Linux）
 │   ├── install-mobile.ps1    # mobile：同上（Windows）
+│   ├── install-mac.sh        # mac：venv + macrun + config.local.yaml
 │   ├── install-pc.ps1        # pc：venv + agents.yaml（Windows）
 │   ├── link-skills.sh        # 软链 skills 到常见 Agent 目录
 │   └── link-skills.ps1
 ├── skills/
 │   ├── mobile-assistant/
-│   │   ├── SKILL.md
-│   │   └── INSTALL.md
+│   ├── mac-assistant/
 │   └── pc-assistant/
-│       ├── SKILL.md
-│       └── INSTALL.md
 └── tools/
-    ├── mobilerun/
-    │   ├── config.template.yaml       # 主机无关 Android 配置模板
-    │   ├── config_multi_windows.yaml  # 旧名，兼容保留
-    │   └── config.local.yaml          # 本地生成（gitignore）
-    └── ufo2/                          # pc-assistant 运行时
-        ├── MODIFICATIONS.md
-        ├── config/ufo/
-        ├── scripts/set_clipboard.py
-        └── ufo/
+    ├── mobilerun/            # mobile 配置模板
+    ├── macrun/               # mac-assistant 薄运行时
+    │   ├── config.template.yaml
+    │   └── macrun/           # CLI + AX/agent
+    └── ufo2/                 # pc-assistant 运行时
 ```
 
 ## 路径与环境变量约定
@@ -112,6 +119,7 @@ omy-skills/
 | `OMY_SKILLS_ROOT` | 本仓库根目录绝对路径 | 强烈建议 |
 | `VOLC_ARK_API_KEY` | 火山引擎方舟 API Key | 使用默认火山模型时需要 |
 | `MOBILERUN_CONFIG` | mobile 使用的 yaml（推荐指向仓库 `config.local.yaml`） | mobile 推荐 |
+| `MACRUN_CONFIG` | mac 使用的 yaml（推荐指向 `tools/macrun/config.local.yaml`） | mac 推荐 |
 | `UFO_ROOT` | 覆盖 UFO² 目录（默认 `$OMY_SKILLS_ROOT/tools/ufo2`） | 可选 |
 | `UFO_PYTHON` | 覆盖 Python（默认 Windows venv 路径） | 可选 |
 | `MOBILERUN_HOME` | mobilerun 源码目录（若用源码安装） | 可选 |
@@ -127,5 +135,6 @@ omy-skills/
 ## 平台要求
 
 - **mobile-assistant**：macOS / Windows / Linux 主机 + USB 调试 Android
+- **mac-assistant**：macOS（辅助功能 + 屏幕录制权限）
 - **pc-assistant**：Windows 10/11（UFO² 依赖 UI Automation）
 - LLM：可访问的多模态 API（默认火山引擎 Doubao）

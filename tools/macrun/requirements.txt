@@ -1,0 +1,7 @@
+# macrun — macOS desktop agent runtime (Python 3.11+)
+openai>=1.40.0
+PyYAML>=6.0
+pyobjc-core>=10.0; sys_platform == 'darwin'
+pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'
+pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'
+pyobjc-framework-ApplicationServices>=10.0; sys_platform == 'darwin'
