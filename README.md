@@ -24,5 +24,7 @@ omy-skills/
 │       ├── SKILL.md          # WorkBuddy 技能定义
 │       └── INSTALL.md        # 安装指南
 └── tools/
-    └── ufo2/                 # 魔改版 UFO² 源码（含 WeChat 兼容 + no-verify 优化）
+    ├── ufo2/                 # 魔改版 UFO² 源码（含 WeChat 兼容 + no-verify 优化）
+    └── mobilerun/
+        └── config_multi_windows.yaml  # mobilerun 配置模板（替换 API Key 后使用）
 ```

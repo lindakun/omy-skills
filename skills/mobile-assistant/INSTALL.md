@@ -12,6 +12,9 @@
 | **Python 3.11~3.13** | [python.org](https://www.python.org/) | 运行 mobilerun |
 | **ADB** | [Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools) | 连接 Android 设备 |
 | **Android 手机** | — | 执行端，需开启 USB 调试 |
+| **配置文件** | 本仓库 `tools/mobilerun/config_multi_windows.yaml`（已含配置模板） | mobilerun 的模型和设备配置 |
+| **API Key（火山引擎）** | [volcengine.com](https://console.volcengine.com/ark/) | 驱动视觉/文本模型 |
+| **API Key（LongCat）** | [longcat.chat](https://longcat.chat) | 驱动文本模型（可选，可换其他） |
 
 ---
 
@@ -88,18 +91,59 @@ mobilerun ping
 # 应该看到 Portal 已安装且可访问的确认信息
 ```
 
-### 5. 配置 API Key
+### 5. 部署配置文件
 
-编辑 mobilerun 目录下的配置文件（通常是 `config.yaml` 或 `pyproject.toml`），找到 API Key 相关字段：
+本仓库 `tools/mobilerun/` 已附带配置模板 `config_multi_windows.yaml`，将其复制到 mobilerun 目录：
+
+```powershell
+# 从本仓库复制配置模板到 mobilerun 目录
+copy G:\github_pj\omy-skills\tools\mobilerun\config_multi_windows.yaml D:\tools\mobilerun\
+```
+> 如果你习惯把 mobilerun 放在其他地方，把路径调整一下即可。
+
+### 6. 配置 API Key
+
+编辑 `config_multi_windows.yaml`，你需要替换以下 API Key：
+
+#### 必填：火山引擎 Key（驱动视觉模型）
 
 ```yaml
-# TODO: 替换为你的 API Key
-api_key: "YOUR_API_KEY_HERE"
+doubao_lite: &doubao_lite
+  ...
+  kwargs:
+    api_key: YOUR_VOLC_ARK_API_KEY  # ← 在这里填入你的 Key
 ```
 
-> API Key 通常来自你使用的 LLM 服务商（如火山引擎、OpenAI 等），具体配置字段因配置文件格式而异。
+> **如何获取？**
+> 1. 访问 [火山引擎方舟平台](https://console.volcengine.com/ark/)
+> 2. 创建接入点，选择 Doubao 系列模型（推荐 `doubao-seed-2-0-lite-260428`）
+> 3. 获取 API Key（格式：`ark-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx-xxxxx`）
 
-### 6. 验证全链路
+#### 可选：LongCat Key（驱动文本模型）
+
+```yaml
+longcat: &longcat
+  ...
+  kwargs:
+    api_key: YOUR_LONGCAT_API_KEY  # ← 在这里填入你的 Key
+```
+
+> 如果不使用 LongCat，可以把 `_active_text_model` 指向其他模型（如 `*doubao_turbo`）。
+
+#### 其他服务商（可选）
+
+配置文件中还预置了以下模型的占位符，按需启用即可：
+
+| 模型 | 用途 | 配置位置 |
+|------|------|---------|
+| 火山引擎 Doubao Turbo | 视觉/文本 | `doubao_turbo` |
+| OpenAI GPT-4o mini | 视觉/文本 | `gpt4o` |
+| DeepSeek Chat | 文本 | `deepseek` |
+| 通义千问 Plus | 文本 | `qwen` |
+
+> **提示**：切换模型只需改 `_active_vision_model` 和 `_active_text_model` 两行中的 `<<: *模型名` 即可。
+
+### 7. 验证全链路
 
 ```powershell
 # 检查手机连接
@@ -123,13 +167,3 @@ mobilerun run "打开设置查看Android版本"
 | 运行时提示模型 API 不可用 | 检查配置文件中的 API Key 是否有效 |
 | `pip install -e .` 报错 | 确认 Python 版本 3.11~3.13，不要使用 3.14+ |
 | 手机连接后 `device` 状态闪烁 | 换一根 USB 数据线，部分充电线不支持数据传输 |
-
----
-
-## 依赖文件参考
-
-本技能还依赖一些外部 wrapper 脚本和配置文件（如 `start.py`、`config_multi_windows.yaml` 等），这些文件位于 [Auto-Test](https://github.com/lindakun/Auto-Test) 项目中。如有需要，请一并克隆：
-
-```powershell
-git clone https://github.com/lindakun/Auto-Test.git
-```
