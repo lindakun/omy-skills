@@ -12,33 +12,29 @@ from openai import OpenAI
 
 from macrun import act, ax, vision
 from macrun.config import api_key_is_placeholder, load_config, resolve_api_key
-from macrun.wechat import is_wechat_send_goal, parse_contact_and_message, send_message
+from macrun.wechat import (
+    is_wechat_read_goal,
+    is_wechat_send_goal,
+    parse_contact_and_message,
+    parse_read_session,
+    read_messages,
+    send_message,
+)
 
 SYSTEM_PROMPT = """你是 macOS 桌面自动化控制器。根据用户 goal 与当前 Accessibility(AX) 控件树，每步只输出 **一个** JSON 动作（不要 markdown 围栏）。
 
 可用 action：
-- open_app: {"action":"open_app","app":"Notes|TextEdit|WeChat|Safari|..."}
-- activate_app: {"action":"activate_app","app":"WeChat"}
-- click: {"action":"click","id":123} 或 {"action":"click","name":"按钮文字","role":"AXButton"}
-- click_xy: {"action":"click_xy","x":100,"y":200}
-- type: {"action":"type","text":"..."}
-- clipboard_paste: {"action":"clipboard_paste","text":"..."}  // 中文必须
-- hotkey: {"action":"hotkey","keys":["cmd","f"]}
-- send: {"action":"send"}  // 【微信发消息必用】Cmd+Enter 再 Enter，兼容两种发送设置
-- wait: {"action":"wait","seconds":1.0}
-- finish: {"action":"finish","result":"..."}
-- fail: {"action":"fail","reason":"..."}
-- need_screenshot: {"action":"need_screenshot","reason":"..."}
+- open_app / activate_app
+- click（按 AX id/name）
+- type / clipboard_paste / hotkey / wait
+- finish / fail / need_screenshot
 
 规则：
-1. 优先用 AX 的 id 点击；不要臆造 id。
-2. 中文输入必须 clipboard_paste。
-3. 微信发消息标准流程：activate/open →（搜索）clipboard_paste 联系人 → hotkey enter 选中 → clipboard_paste 正文 → **send**（不要只用 enter）。
-4. 微信发送：禁止仅 {"action":"hotkey","keys":["enter"]} 作为发送；必须用 {"action":"send"}。
-5. 搜索选中联系人可以用 enter；**聊天框里发送消息必须用 send**。
-6. open_app 同一应用最多一次；之后用 activate_app / send / paste。
-7. 不要在消息仍可能在输入框时 finish；粘贴正文后下一步必须是 send，再 finish。
-8. 禁止危险操作。
+1. 优先 AX id；不要臆造 id。
+2. 中文用 clipboard_paste。
+3. **微信相关任务禁止 click_xy**（坐标乱点几乎必错）。微信发消息/读消息应由专用脚本处理；若你仍在处理微信，只用 hotkey/clipboard_paste/activate_app。
+4. 非微信且无可靠 id 时才可用 click_xy。
+5. 禁止危险操作。
 """
 
 # goal 里提到的应用线索 → 规范名
@@ -244,6 +240,10 @@ def execute_action(
             raise RuntimeError(f"click target not found: {action}")
         return act.click_node(node, pid=pid)
     if name == "click_xy":
+        # 微信禁止坐标乱点
+        t = str(state.get("target_app") or "").lower()
+        if "wechat" in t or "微信" in t:
+            raise RuntimeError("WeChat: click_xy forbidden; use wechat-send/wechat-read scripts")
         return act.click_xy(float(action["x"]), float(action["y"]))
     if name == "type":
         return act.type_text(
@@ -347,7 +347,14 @@ def run_goal(
     if not ax.is_trusted():
         _log("WARN: Accessibility not trusted — actions may fail")
 
-    # 微信发消息：走确定性脚本，避免视觉 LLM 乱点 / 卡在第 2 步
+    # 微信读消息 / 发消息：专用脚本，不走通用 click_xy Agent
+    if is_wechat_read_goal(goal):
+        session, last_n = parse_read_session(goal)
+        _log(f"wechat-read mode session={session!r} last_n={last_n}")
+        if session:
+            return read_messages(session, last_n=last_n, log=_log)
+        _log("wechat-read: parse session failed, fallback to LLM agent")
+
     if is_wechat_send_goal(goal):
         contact, message = parse_contact_and_message(goal)
         _log(f"wechat-script mode contact={contact!r} message_len={len(message or '')}")
@@ -359,6 +366,7 @@ def run_goal(
     last_error: str | None = None
     force_screenshot = False
     open_counts: dict[str, int] = {}
+    wechat_goal = state.get("target_app") == "WeChat" or ("微信" in goal)
 
     for step in range(1, max_steps + 1):
         app_info: dict[str, Any] = {}
@@ -386,26 +394,15 @@ def run_goal(
             need_shot = True
         if last_error and shot_on_fail:
             need_shot = True
-        # 微信等 AX 极稀疏：不要每步截图（视觉请求慢，30s 易超时）；首步/失败/每 N 步
+        # 微信等 AX 极稀疏：通用 Agent 兜底时**每步截图**（禁止盲开）；专用脚本不走这里
         tname = str(state.get("target_app") or app_info.get("name") or "").lower()
-        sparse_app = any(k in tname for k in ("wechat", "微信"))
+        sparse_app = any(k in tname for k in ("wechat", "微信")) or wechat_goal
         if sparse_app and len(nodes) < 12:
-            if (
-                force_screenshot
-                or last_error
-                or step == 1
-                or (sparse_every > 0 and step % sparse_every == 0)
-            ):
-                need_shot = True
-                _log(
-                    f"STEP {step} sparse AX (nodes={len(nodes)}), "
-                    f"attach compressed screenshot"
-                )
-            else:
-                _log(
-                    f"STEP {step} sparse AX (nodes={len(nodes)}), "
-                    f"skip screenshot (every {sparse_every} steps)"
-                )
+            need_shot = True
+            _log(
+                f"STEP {step} sparse AX (nodes={len(nodes)}), "
+                f"force screenshot (WeChat fallback agent)"
+            )
         force_screenshot = False
 
         image_b64 = None

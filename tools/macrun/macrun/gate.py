@@ -77,9 +77,17 @@ def _ask_vision(
         max_side_override=max_side,
         quality_override=quality,
     )
-    b64, mime = vision.capture_b64(max_side=side, quality=q)
+    b64, mime = vision.capture_b64(
+        max_side=side,
+        quality=q,
+        app_window=True,
+        owner_names=["WeChat", "微信", "Weixin"],
+    )
     if log:
-        log(f"gate: screenshot mime={mime} side={side} q={q} timeout={timeout}s")
+        log(
+            f"gate: screenshot mime={mime} side={side} q={q} "
+            f"timeout={timeout}s window=WeChat"
+        )
     resp = client.chat.completions.create(
         model=model,
         messages=[
@@ -232,4 +240,129 @@ def gate2_send_verify(
         "confidence": conf,
         "reason": str(data.get("reason") or ""),
         "gate": "gate2_send",
+    }
+
+
+def gate_read_messages(
+    session: str,
+    last_n: int = 5,
+    log: Callable[[str], None] | None = None,
+    extra_hint: str = "",
+) -> dict[str, Any]:
+    """从当前聊天窗口截图抽取最近 N 条消息。
+
+    返回：
+      in_session: bool
+      session_title: str
+      messages: [{index, sender, text, time?}]
+      confidence: float
+      reason: str
+    """
+    n = max(1, min(int(last_n or 5), 30))
+    prompt = (
+        f"微信聊天截图。目标会话「{session}」。"
+        f"抽取最近最多{n}条可见消息。"
+        f"只输出JSON："
+        f'{{"in_session":true/false,"session_title":"...","messages":'
+        f'[{{"index":1,"sender":"...","text":"..."}}],'
+        f'"confidence":0.9,"reason":"..."}}'
+        f" 勿编造。{extra_hint}"
+    )
+    cfg = load_config()
+    llm = cfg.get("llm") or {}
+    wcfg = cfg.get("wechat") or {}
+    read_timeout = float(wcfg.get("gate_read_timeout") or 75)
+    read_side = int(wcfg.get("gate_read_max_side") or 720)
+    read_q = int(wcfg.get("gate_read_jpeg_quality") or 35)
+    base = str(llm.get("api_base") or "https://api.openai.com/v1").rstrip("/")
+    if base.endswith("/chat/completions"):
+        base = base[: -len("/chat/completions")]
+    model = str(llm.get("model") or "gpt-4o")
+    key = resolve_api_key(cfg)
+
+    def _one_read(side: int, q: int, to: float) -> dict[str, Any]:
+        client = OpenAI(api_key=key, base_url=base, timeout=to, max_retries=0)
+        b64, mime = vision.capture_b64(
+            max_side=side,
+            quality=q,
+            app_window=True,
+            owner_names=["WeChat", "微信", "Weixin"],
+        )
+        if log:
+            log(
+                f"gate-read: screenshot mime={mime} side={side} q={q} "
+                f"timeout={to}s last_n={n} window=WeChat bytes≈{len(b64)*3//4}"
+            )
+        img_part: dict[str, Any] = {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/{mime};base64,{b64}",
+                "detail": "low",
+            },
+        }
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Extract chat JSON only.",
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        img_part,
+                    ],
+                },
+            ],
+            temperature=0.0,
+            max_tokens=600,
+            timeout=to,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        if log:
+            log(f"gate-read: raw={raw[:400]}")
+        return _parse_json(raw)
+
+    # 单次调用：二次 90s 重试会把失败体感拖到 3 分钟+
+    try:
+        data = _one_read(read_side, read_q, read_timeout)
+    except Exception as e:
+        if log:
+            log(f"gate-read: error {e}")
+        raise RuntimeError(
+            f"读消息视觉超时/失败（{e}）。可在 config 提高 wechat.gate_read_timeout，"
+            f"或检查火山视觉 API 是否限流。"
+        ) from e
+
+    msgs = data.get("messages") or []
+    if not isinstance(msgs, list):
+        msgs = []
+    cleaned = []
+    for i, m in enumerate(msgs[:n]):
+        if not isinstance(m, dict):
+            continue
+        text = str(m.get("text") or "").strip()
+        if not text:
+            continue
+        cleaned.append(
+            {
+                "index": int(m.get("index") or (i + 1)),
+                "sender": str(m.get("sender") or "未知"),
+                "text": text,
+                "time": str(m.get("time") or ""),
+            }
+        )
+    in_session = bool(data.get("in_session"))
+    conf = float(data.get("confidence") or 0.0)
+    if in_session and conf < 0.5:
+        in_session = False
+        data["reason"] = f"confidence too low ({conf}): {data.get('reason')}"
+    return {
+        "in_session": in_session,
+        "session_title": str(data.get("session_title") or ""),
+        "messages": cleaned,
+        "confidence": conf,
+        "reason": str(data.get("reason") or ""),
+        "gate": "gate_read",
     }

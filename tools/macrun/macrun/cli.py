@@ -98,10 +98,7 @@ def cmd_dump_tree(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_wechat_send(args: argparse.Namespace) -> int:
-    from macrun.wechat import normalize_message, send_message
-
-    log_path = args.log
+def _log_factory(log_path: str | None):
     log_file = open(log_path, "a", encoding="utf-8") if log_path else None
 
     def _log(msg: str) -> None:
@@ -111,6 +108,33 @@ def cmd_wechat_send(args: argparse.Namespace) -> int:
         else:
             print(msg, flush=True)
 
+    return _log, log_file
+
+
+def _print_result(result: dict, log_path: str | None) -> int:
+    status = result.get("status")
+    line = (
+        f"✅ SUCCESS: {result.get('result')}"
+        if status == "success"
+        else f"❌ FAIL: {result.get('reason') or result}"
+    )
+    print(line, flush=True)
+    if status == "success" and result.get("clipboard_text"):
+        # 读消息时额外打印内容便于 Agent 回复用户
+        print(result["clipboard_text"], flush=True)
+    if log_path:
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+    return 0 if status == "success" else 1
+
+
+def cmd_wechat_send(args: argparse.Namespace) -> int:
+    from macrun.wechat import normalize_message, send_message
+
+    _log, log_file = _log_factory(args.log)
     try:
         result = send_message(
             args.contact,
@@ -120,21 +144,24 @@ def cmd_wechat_send(args: argparse.Namespace) -> int:
     finally:
         if log_file:
             log_file.close()
+    return _print_result(result, args.log)
 
-    status = result.get("status")
-    line = (
-        f"✅ SUCCESS: {result.get('result')}"
-        if status == "success"
-        else f"❌ FAIL: {result.get('reason') or result}"
-    )
-    print(line, flush=True)
-    if log_path:
-        try:
-            with open(log_path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-        except Exception:
-            pass
-    return 0 if status == "success" else 1
+
+def cmd_wechat_read(args: argparse.Namespace) -> int:
+    from macrun.wechat import read_messages
+
+    _log, log_file = _log_factory(args.log)
+    try:
+        result = read_messages(
+            args.session,
+            last_n=args.last,
+            log=_log,
+            to_clipboard=not args.no_clipboard,
+        )
+    finally:
+        if log_file:
+            log_file.close()
+    return _print_result(result, args.log)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -198,11 +225,18 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("-l", "--log", help="Append log file path")
     r.set_defaults(func=cmd_run)
 
-    w = sub.add_parser("wechat-send", help="Deterministic WeChat send (no vision LLM)")
-    w.add_argument("--contact", "-t", required=True, help="Contact name")
+    w = sub.add_parser("wechat-send", help="WeChat send with vision gates")
+    w.add_argument("--contact", "-t", required=True, help="Contact / session name")
     w.add_argument("--message", "-m", required=True, help="Message text")
     w.add_argument("-l", "--log", help="Append log file path")
     w.set_defaults(func=cmd_wechat_send)
+
+    wr = sub.add_parser("wechat-read", help="WeChat read last N messages + clipboard")
+    wr.add_argument("--session", "-s", required=True, help="Chat / group name")
+    wr.add_argument("--last", "-n", type=int, default=5, help="How many recent messages")
+    wr.add_argument("--no-clipboard", action="store_true", help="Do not write clipboard")
+    wr.add_argument("-l", "--log", help="Append log file path")
+    wr.set_defaults(func=cmd_wechat_read)
 
     return p
 

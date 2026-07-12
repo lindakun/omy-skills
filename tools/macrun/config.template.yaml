@@ -35,6 +35,10 @@ wechat:
   gate_timeout: 60
   gate_max_side: 960
   gate_jpeg_quality: 45
+  # 读消息视觉（可更长）
+  gate_read_timeout: 90
+  gate_read_max_side: 800
+  gate_read_jpeg_quality: 40
   search_hotkey: [cmd, f]
   # 各阶段等待（秒）
   open_sleep: 0.35
@@ -42,6 +46,8 @@ wechat:
   after_contact_sleep: 0.35
   after_select_sleep: 0.45
   after_message_sleep: 0.25
+  # 读消息：不足 N 条时是否上滚再截一屏
+  read_scroll_once: true
 
 safety:
   # 命中这些词时拒绝执行（可继续扩展）
