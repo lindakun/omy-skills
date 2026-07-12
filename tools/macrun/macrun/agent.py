@@ -17,26 +17,27 @@ SYSTEM_PROMPT = """你是 macOS 桌面自动化控制器。根据用户 goal 与
 
 可用 action：
 - open_app: {"action":"open_app","app":"Notes|TextEdit|WeChat|Safari|..."}
-- activate_app: {"action":"activate_app","app":"WeChat"}  // 强制前置已打开的 App（宿主抢焦点时必用）
+- activate_app: {"action":"activate_app","app":"WeChat"}
 - click: {"action":"click","id":123} 或 {"action":"click","name":"按钮文字","role":"AXButton"}
-- click_xy: {"action":"click_xy","x":100,"y":200}  // 仅截图后且无可靠 id 时使用
+- click_xy: {"action":"click_xy","x":100,"y":200}
 - type: {"action":"type","text":"..."}
-- clipboard_paste: {"action":"clipboard_paste","text":"..."}  // 中文/微信必须用这个
-- hotkey: {"action":"hotkey","keys":["cmd","f"]}  // 微信搜索常用 cmd+f 或 cmd+k 视版本
+- clipboard_paste: {"action":"clipboard_paste","text":"..."}  // 中文必须
+- hotkey: {"action":"hotkey","keys":["cmd","f"]}
+- send: {"action":"send"}  // 【微信发消息必用】Cmd+Enter 再 Enter，兼容两种发送设置
 - wait: {"action":"wait","seconds":1.0}
-- finish: {"action":"finish","result":"给用户的结果摘要"}
+- finish: {"action":"finish","result":"..."}
 - fail: {"action":"fail","reason":"..."}
 - need_screenshot: {"action":"need_screenshot","reason":"..."}
 
 规则：
 1. 优先用 AX 的 id 点击；不要臆造 id。
-2. 中文输入、微信发消息：必须用 clipboard_paste，不要 type 直接敲中文。
-3. 微信：open_app WeChat 一次即可；若 ax_tree 显示 WorkBuddy/Cursor/Terminal 等宿主，先 activate_app WeChat，不要反复 open_app。
-4. 不要连续多次 open_app 同一应用；打开后应 click/clipboard_paste/hotkey 推进任务。
-5. 目标完成后立刻 finish。
-6. 禁止危险操作（清空废纸篓、抹盘、sudo rm 等）。
-7. 控件树为空或明显是错误应用时，先 activate_app 目标，再 need_screenshot。
-8. 观察上下文里的 target_app / observed_app / running_hint 很重要。
+2. 中文输入必须 clipboard_paste。
+3. 微信发消息标准流程：activate/open →（搜索）clipboard_paste 联系人 → hotkey enter 选中 → clipboard_paste 正文 → **send**（不要只用 enter）。
+4. 微信发送：禁止仅 {"action":"hotkey","keys":["enter"]} 作为发送；必须用 {"action":"send"}。
+5. 搜索选中联系人可以用 enter；**聊天框里发送消息必须用 send**。
+6. open_app 同一应用最多一次；之后用 activate_app / send / paste。
+7. 不要在消息仍可能在输入框时 finish；粘贴正文后下一步必须是 send，再 finish。
+8. 禁止危险操作。
 """
 
 # goal 里提到的应用线索 → 规范名
@@ -199,10 +200,16 @@ def execute_action(
     state: dict[str, Any],
 ) -> str:
     name = str(action.get("action") or "").lower().strip()
+    target = state.get("target_app")
+
+    # 除 wait/finish 外，执行前再抢一次焦点（LLM 耗时内宿主常抢回前台）
+    if name not in ("finish", "fail", "need_screenshot", "wait", "open_app", "activate_app"):
+        if target:
+            act.ensure_front(str(target))
+
     if name == "open_app":
         app = str(action.get("app") or action.get("name") or "")
         result = act.open_app(app)
-        # 从结果解析 pid
         m = re.search(r"pid=(\d+)", result)
         if m:
             state["target_pid"] = int(m.group(1))
@@ -214,7 +221,7 @@ def execute_action(
     if name == "activate_app":
         app = str(action.get("app") or action.get("name") or state.get("target_app") or "")
         info = ax.activate_app(name=app)
-        state["target_app"] = app
+        state["target_app"] = act.resolve_app_name(app)
         state["target_pid"] = int(info["pid"])
         return f"activated {info.get('name')} pid={info.get('pid')}"
     if name == "click":
@@ -233,14 +240,28 @@ def execute_action(
     if name == "click_xy":
         return act.click_xy(float(action["x"]), float(action["y"]))
     if name == "type":
-        return act.type_text(str(action.get("text") or ""), prefer_clipboard=True)
+        return act.type_text(
+            str(action.get("text") or ""),
+            prefer_clipboard=True,
+            app_name=target,
+        )
     if name in ("clipboard_paste", "clipboard_type"):
-        return act.clipboard_type(str(action.get("text") or ""))
+        return act.clipboard_type(str(action.get("text") or ""), app_name=target)
+    if name == "send":
+        # 微信等：Cmd+Enter + Enter
+        return act.send_chat(app_name=target)
     if name == "hotkey":
         keys = action.get("keys") or []
         if isinstance(keys, str):
             keys = keys.replace("+", " ").split()
-        return act.hotkey(*[str(k) for k in keys])
+        keys = [str(k) for k in keys]
+        # 聊天发送场景：裸 enter 升级为 send（选联系人时 history 里还没有正文 paste 则保留 enter）
+        keys_l = [k.lower() for k in keys]
+        if keys_l in (["enter"], ["return"]) and state.get("pending_send"):
+            state["pending_send"] = False
+            return act.send_chat(app_name=target)
+        result = act.hotkey(*keys, app_name=target)
+        return result
     if name == "wait":
         sec = float(action.get("seconds") or 1.0)
         time.sleep(sec)
@@ -404,6 +425,21 @@ def run_goal(
                 action = {"action": "activate_app", "app": action.get("app") or action.get("name")}
                 aname = "activate_app"
 
+        # 微信：模型若在 pending_send 时直接 finish，先强制 send 一次
+        if aname == "finish" and state.get("pending_send") and state.get("target_app"):
+            tname = str(state.get("target_app") or "").lower()
+            if "wechat" in tname or "微信" in tname:
+                _log(f"STEP {step} coerce finish -> send first (message may still be in input)")
+                try:
+                    send_result = act.send_chat(app_name=state.get("target_app"))
+                    history.append(
+                        {"action": {"action": "send"}, "result": send_result}
+                    )
+                    _log(f"STEP {step} ok: {send_result}")
+                    state["pending_send"] = False
+                except Exception as e:
+                    _log(f"STEP {step} auto-send error: {e}")
+
         if aname == "finish":
             result = action.get("result") or action.get("message") or "done"
             _log(f"FINISH: {result}")
@@ -430,6 +466,17 @@ def run_goal(
             history.append({"action": action, "result": result})
             last_error = None
             _log(f"STEP {step} ok: {result}")
+
+            # 粘贴正文成功后：下一次裸 enter / 误 finish 应走 send
+            if aname in ("clipboard_paste", "clipboard_type", "type"):
+                text = str(action.get("text") or "")
+                if len(text) >= 4 or any(ch in text for ch in "。！？~～!?😊👋嗨"):
+                    state["pending_send"] = True
+                    _log(f"STEP {step} mark pending_send after paste body")
+            if aname == "send" or (
+                aname == "hotkey" and "send_chat" in str(result)
+            ):
+                state["pending_send"] = False
         except Exception as e:
             last_error = str(e)
             history.append({"action": action, "result": f"error: {e}"})

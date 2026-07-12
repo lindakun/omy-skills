@@ -524,7 +524,12 @@ _KEYCODES = {
 
 
 def hotkey(*keys: str) -> None:
-    """组合键，如 hotkey('cmd', 'v')。"""
+    """组合键，如 hotkey('cmd', 'v') / hotkey('return')。
+
+    Return/Enter 额外走 System Events，微信等 App 对纯 CGEvent 回车经常吞掉。
+    """
+    import time
+
     require_darwin()
     if not _AX_OK:
         raise RuntimeError(_ERR)
@@ -550,16 +555,45 @@ def hotkey(*keys: str) -> None:
     if code is None and len(main) == 1:
         code = _KEYCODES.get(main.lower())
     if code is None:
-        # unicode 单字符：用键盘 unicode 事件
         _type_unicode(main)
         return
+
+    # CGEvent：必须显式写 flags（含 0），down/up 间稍作间隔
     down = CGEventCreateKeyboardEvent(None, code, True)
     up = CGEventCreateKeyboardEvent(None, code, False)
-    if flags:
-        CGEventSetFlags(down, flags)
-        CGEventSetFlags(up, flags)
+    CGEventSetFlags(down, flags)
+    CGEventSetFlags(up, flags)
     CGEventPost(kCGHIDEventTap, down)
+    time.sleep(0.03)
     CGEventPost(kCGHIDEventTap, up)
+
+    # Return/Enter：System Events 双保险（微信聊天框更认这条路径）
+    if main in ("return", "enter"):
+        time.sleep(0.04)
+        try:
+            import subprocess
+
+            if flags & kCGEventFlagMaskCommand:
+                script = (
+                    'tell application "System Events" to '
+                    "keystroke return using command down"
+                )
+            elif flags & kCGEventFlagMaskShift:
+                script = (
+                    'tell application "System Events" to '
+                    "keystroke return using shift down"
+                )
+            else:
+                # key code 36 = Return
+                script = 'tell application "System Events" to key code 36'
+            subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except Exception:
+            pass
 
 
 def _type_unicode(text: str) -> None:
