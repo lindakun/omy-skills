@@ -190,7 +190,8 @@ def activate_app(pid: int | None = None, name: str | None = None) -> dict[str, A
     ok = target.activateWithOptions_(2)
     import time
 
-    time.sleep(0.45)
+    # 短等待即可；外层 ensure_front 还会再 settle
+    time.sleep(0.12)
     return {
         "name": str(target.localizedName() or ""),
         "bundle_id": str(target.bundleIdentifier() or ""),

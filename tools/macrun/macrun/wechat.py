@@ -8,16 +8,11 @@ import time
 from typing import Any, Callable
 
 from macrun import act, ax
+from macrun.config import load_config
 
 
 def parse_contact_and_message(goal: str) -> tuple[str | None, str | None]:
-    """从 goal 文本提取联系人与正文。
-
-    支持：
-    - 联系人「张三」…正文「你好」
-    - 搜索「张三」…粘贴「你好」
-    - 给张三发：你好 / 发给张三：你好
-    """
+    """从 goal 文本提取联系人与正文。"""
     contact = None
     message = None
 
@@ -41,17 +36,14 @@ def parse_contact_and_message(goal: str) -> tuple[str | None, str | None]:
         if m:
             message = m.group(1).strip()
     if not message:
-        # 第二个书名号/引号对常为正文
         pairs = re.findall(r"[「『\"'](.+?)[」』\"']", goal, re.S)
         if contact and len(pairs) >= 2:
-            # 去掉已识别的联系人
             rest = [p for p in pairs if p.strip() != contact]
             if rest:
                 message = rest[-1].strip()
         elif not contact and len(pairs) >= 2:
             contact, message = pairs[0].strip(), pairs[1].strip()
         elif len(pairs) == 1 and not message:
-            # 仅一段引号且像正文
             message = pairs[0].strip()
 
     if not message:
@@ -70,12 +62,70 @@ def is_wechat_send_goal(goal: str) -> bool:
     return has_wechat and has_send and bool(contact and message)
 
 
+def _wechat_cfg() -> dict[str, Any]:
+    try:
+        cfg = load_config()
+        return dict(cfg.get("wechat") or {})
+    except Exception:
+        return {}
+
+
+def _ts() -> float:
+    return time.perf_counter()
+
+
+def _log_step(
+    log: Callable[[str], None],
+    t0: float,
+    msg: str,
+) -> None:
+    log(f"+{time.perf_counter() - t0:.2f}s {msg}")
+
+
+def _is_wechat_front() -> bool:
+    try:
+        front = ax.frontmost_app_info()
+        blob = f"{front.get('name','')} {front.get('bundle_id','')}".lower()
+        return "wechat" in blob or "微信" in blob or "tencent.xinwechat" in blob
+    except Exception:
+        return False
+
+
+def _critical_hotkey(
+    *keys: str,
+    log: Callable[[str], None],
+    t0: float,
+    label: str,
+) -> None:
+    """关键热键：前置 + 发送；若焦点被抢则重试一次。"""
+    act.ensure_front("WeChat", settle=0.12)
+    act.hotkey(*keys, app_name="WeChat", ensure=False, settle=0.04)
+    if not _is_wechat_front():
+        _log_step(log, t0, f"{label}: focus lost, retry")
+        act.ensure_front("WeChat", settle=0.15)
+        act.hotkey(*keys, app_name="WeChat", ensure=False, settle=0.04)
+
+
+def _critical_paste(
+    text: str,
+    log: Callable[[str], None],
+    t0: float,
+    label: str,
+) -> None:
+    act.ensure_front("WeChat", settle=0.12)
+    act.clipboard_type(text, app_name="WeChat", ensure=False)
+    if not _is_wechat_front():
+        _log_step(log, t0, f"{label}: focus lost after paste, re-front")
+        act.ensure_front("WeChat", settle=0.12)
+
+
 def send_message(
     contact: str,
     message: str,
     log: Callable[[str], None] | None = None,
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """固定快捷键流程发微信消息。"""
+    """固定快捷键流程发微信消息（热启动加速 + 可配置发送键 + 焦点重试）。"""
 
     def _log(msg: str) -> None:
         if log:
@@ -83,54 +133,96 @@ def send_message(
         else:
             print(msg, flush=True)
 
-    _log(f"wechat-script start contact={contact!r} message={message!r}")
+    t0 = _ts()
+    wcfg = config if config is not None else _wechat_cfg()
+    send_mode = str(wcfg.get("send_mode") or "both").lower().strip()
+    # both | enter | cmd_enter
+    if send_mode not in ("both", "enter", "cmd_enter", "cmd+enter", "return"):
+        send_mode = "both"
+    if send_mode in ("cmd+enter",):
+        send_mode = "cmd_enter"
+    if send_mode == "return":
+        send_mode = "enter"
 
-    # 1) 打开并前置
-    _log("wechat-script: open/activate WeChat")
-    try:
-        r = act.open_app("WeChat")
-        _log(f"wechat-script: {r}")
-    except Exception as e:
-        _log(f"wechat-script: open_app warn {e}, try activate")
-        act.ensure_front("WeChat")
-    time.sleep(0.6)
+    search_keys = wcfg.get("search_hotkey") or ["cmd", "f"]
+    if isinstance(search_keys, str):
+        search_keys = search_keys.replace("+", " ").split()
+    search_keys = [str(k) for k in search_keys]
+
+    select_extra_enter = bool(wcfg.get("select_extra_enter", True))
+    open_sleep = float(wcfg.get("open_sleep") or 0.35)
+    search_sleep = float(wcfg.get("search_sleep") or 0.28)
+    after_contact_sleep = float(wcfg.get("after_contact_sleep") or 0.28)
+    after_select_sleep = float(wcfg.get("after_select_sleep") or 0.40)
+    after_message_sleep = float(wcfg.get("after_message_sleep") or 0.22)
+
+    _log(f"wechat-script start contact={contact!r} message={message!r} send_mode={send_mode}")
+
+    # 1) 热启动：已在跑则只 activate
+    found = ax.find_app(name="WeChat")
+    if found:
+        _log_step(_log, t0, f"hot-start activate pid={found.get('pid')}")
+        act.ensure_front("WeChat", settle=0.15)
+        time.sleep(0.12)
+    else:
+        _log_step(_log, t0, "cold-start open WeChat")
+        try:
+            r = act.open_app("WeChat")
+            _log_step(_log, t0, str(r))
+        except Exception as e:
+            _log_step(_log, t0, f"open_app warn {e}")
+            act.ensure_front("WeChat", settle=0.2)
+        time.sleep(open_sleep)
+
+    if not ax.find_app(name="WeChat"):
+        return {"status": "fail", "reason": "WeChat not running after open/activate"}
+
+    if not _is_wechat_front():
+        act.ensure_front("WeChat", settle=0.18)
 
     front = ax.frontmost_app_info()
-    found = ax.find_app(name="WeChat")
-    _log(f"wechat-script: frontmost={front} found={found}")
-    if not found:
-        return {"status": "fail", "reason": "WeChat not running after open"}
+    _log_step(_log, t0, f"frontmost={front.get('name')} active_ok={_is_wechat_front()}")
 
-    # 2) 搜索联系人 Cmd+F（部分版本是 Cmd+F，失败可再试）
-    _log("wechat-script: Cmd+F search")
-    act.hotkey("cmd", "f", app_name="WeChat")
-    time.sleep(0.45)
+    # 2) 搜索
+    _log_step(_log, t0, f"search hotkey {'+'.join(search_keys)}")
+    _critical_hotkey(*search_keys, log=_log, t0=t0, label="search")
+    time.sleep(search_sleep)
 
-    # 3) 粘贴联系人 + 回车选中
-    _log(f"wechat-script: paste contact {contact!r}")
-    act.clipboard_type(contact, app_name="WeChat")
-    time.sleep(0.35)
-    act.hotkey("return", app_name="WeChat")
-    time.sleep(0.7)
+    # 3) 粘贴联系人 + 选中（Down 更稳可选，默认 Enter；可二次 Enter）
+    _log_step(_log, t0, f"paste contact {contact!r}")
+    _critical_paste(contact, log=_log, t0=t0, label="contact")
+    time.sleep(after_contact_sleep)
 
-    # 再回车一次，防止停在搜索结果列表
-    act.hotkey("return", app_name="WeChat")
-    time.sleep(0.5)
+    # 先 ↓ 再 Enter，降低停在搜索框的概率
+    if bool(wcfg.get("select_with_down", True)):
+        _critical_hotkey("down", log=_log, t0=t0, label="select-down")
+        time.sleep(0.08)
+    _critical_hotkey("return", log=_log, t0=t0, label="select-enter")
+    time.sleep(after_select_sleep)
 
-    # 4) 粘贴正文
-    _log(f"wechat-script: paste message ({len(message)} chars)")
-    act.clipboard_type(message, app_name="WeChat")
-    time.sleep(0.35)
+    if select_extra_enter:
+        _critical_hotkey("return", log=_log, t0=t0, label="select-enter-2")
+        time.sleep(0.22)
 
-    # 5) 发送（Cmd+Enter + Enter）
-    _log("wechat-script: send")
-    r = act.send_chat(app_name="WeChat")
-    _log(f"wechat-script: {r}")
-    time.sleep(0.3)
+    # 4) 正文
+    _log_step(_log, t0, f"paste message ({len(message)} chars)")
+    _critical_paste(message, log=_log, t0=t0, label="message")
+    time.sleep(after_message_sleep)
 
+    # 5) 发送
+    _log_step(_log, t0, f"send mode={send_mode}")
+    act.ensure_front("WeChat", settle=0.12)
+    send_result = act.send_chat(app_name="WeChat", mode=send_mode, ensure=False)
+    if not _is_wechat_front():
+        _log_step(_log, t0, "send: focus lost, resend")
+        act.ensure_front("WeChat", settle=0.15)
+        send_result = act.send_chat(app_name="WeChat", mode=send_mode, ensure=False)
+    _log_step(_log, t0, str(send_result))
+
+    elapsed = time.perf_counter() - t0
     result = (
-        f"已按脚本流程向「{contact}」发送消息（{len(message)} 字）。"
-        f"请在微信中确认气泡是否出现；若仍在输入框，可能是发送快捷键设置不同。"
+        f"已向「{contact}」发送消息（{len(message)} 字，脚本 {elapsed:.1f}s，mode={send_mode}）。"
+        f"请在微信确认气泡；若仍在输入框，把 config wechat.send_mode 改为 enter 或 cmd_enter。"
     )
     _log(f"FINISH: {result}")
     return {
@@ -139,4 +231,6 @@ def send_message(
         "contact": contact,
         "message": message,
         "mode": "wechat-script",
+        "send_mode": send_mode,
+        "elapsed_s": round(elapsed, 2),
     }

@@ -254,20 +254,27 @@ def execute_action(
     if name in ("clipboard_paste", "clipboard_type"):
         return act.clipboard_type(str(action.get("text") or ""), app_name=target)
     if name == "send":
-        # 微信等：Cmd+Enter + Enter
-        return act.send_chat(app_name=target)
+        mode = "both"
+        try:
+            mode = str((load_config().get("wechat") or {}).get("send_mode") or "both")
+        except Exception:
+            pass
+        return act.send_chat(app_name=target, mode=mode)
     if name == "hotkey":
         keys = action.get("keys") or []
         if isinstance(keys, str):
             keys = keys.replace("+", " ").split()
         keys = [str(k) for k in keys]
-        # 聊天发送场景：裸 enter 升级为 send（选联系人时 history 里还没有正文 paste 则保留 enter）
         keys_l = [k.lower() for k in keys]
         if keys_l in (["enter"], ["return"]) and state.get("pending_send"):
             state["pending_send"] = False
-            return act.send_chat(app_name=target)
-        result = act.hotkey(*keys, app_name=target)
-        return result
+            mode = "both"
+            try:
+                mode = str((load_config().get("wechat") or {}).get("send_mode") or "both")
+            except Exception:
+                pass
+            return act.send_chat(app_name=target, mode=mode)
+        return act.hotkey(*keys, app_name=target)
     if name == "wait":
         sec = float(action.get("seconds") or 1.0)
         time.sleep(sec)

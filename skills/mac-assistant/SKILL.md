@@ -1,6 +1,6 @@
 ---
 name: mac-assistant
-description: Mac 桌面自动化助理（仅 macOS）。将「用电脑…」「在 Mac 上…」「打开备忘录/微信…」等自然语言，转化为 macrun 可执行的 goal，在 macOS 桌面上完成 UI 操作（打开应用/点击/输入/读取信息），并把结果回复用户。依赖辅助功能权限与 macrun。
+description: Mac 桌面自动化助理（仅 macOS）。将「用电脑…」「在 Mac 上…」「打开备忘录/微信…」等自然语言，转化为 macrun 操作。微信发消息优先 wechat-send 确定性脚本。
 metadata:
   platforms: [macos]
   requires: [macrun, accessibility, screen-recording]
@@ -10,141 +10,98 @@ metadata:
 
 ## 平台硬限制（最先检查）
 
-1. **仅 macOS（Darwin）**。若当前主机为 Windows / Linux：
-   - **停止**，不要安装或运行 macrun
-   - Windows 桌面 → `pc-assistant`
-   - 手机 → `mobile-assistant`
-2. 涉及「手机」→ `mobile-assistant`，不用本技能。
+1. **仅 macOS（Darwin）**。Windows → `pc-assistant`；手机 → `mobile-assistant`。
+2. 涉及「手机」→ `mobile-assistant`。
 
 ## 触发条件
 
 - "用电脑..." / "在电脑上..."（且主机为 Mac）
 - "在 Mac 上..." / "用 Mac..."
-- "打开备忘录/TextEdit/微信..."（桌面 App 语境）
-- "帮我操作电脑..."（Mac）
+- "打开备忘录/TextEdit/微信..." / "给某某发微信..."
 
-## 路径解析（可移植）
-
-### `REPO_ROOT`
-
-1. `OMY_SKILLS_ROOT`
-2. 搜索含 `tools/macrun` 与 `skills/mac-assistant/SKILL.md` 的目录
-3. 找不到 → 提示设置 `OMY_SKILLS_ROOT`
-
-### 运行时
+## 路径解析
 
 | 项 | 解析 |
 |----|------|
-| `MACRUN_BIN` | 优先 `PATH` 中的 `macrun`；否则 `{REPO_ROOT}/tools/macrun/venv/bin/macrun` |
-| 配置 | `MACRUN_CONFIG` → `{REPO_ROOT}/tools/macrun/config.local.yaml` → template |
+| `REPO_ROOT` | `OMY_SKILLS_ROOT` 或含 `tools/macrun` + 本 SKILL 的目录 |
+| `MACRUN_BIN` | PATH 的 `macrun`，否则 `{REPO_ROOT}/tools/macrun/venv/bin/macrun` |
+| 配置 | `MACRUN_CONFIG` 或 `{REPO_ROOT}/tools/macrun/config.local.yaml` |
 | 日志 | `/tmp/mac_assistant.log` |
-
-**不要**写死 `/Users/某用户/...`。
 
 ## 前置检查
 
-失败则引导 `skills/mac-assistant/INSTALL.md` 或 `./scripts/install-mac.sh`：
+1. `uname -s` → Darwin  
+2. `macrun` 可用  
+3. `macrun doctor`（辅助功能建议 trusted；Key 非占位符）  
 
-1. `uname -s` 为 `Darwin`
-2. `macrun` 可执行（`macrun --version` 或 venv 路径）
-3. `macrun doctor`：辅助功能建议为 trusted；API Key 非占位符
-4. 配置存在且 `api_key` 不是 `YOUR_VOLC_ARK_API_KEY`（或已设 `VOLC_ARK_API_KEY`）
+失败 → `skills/mac-assistant/INSTALL.md` / `./scripts/install-mac.sh`
 
-## 工作流
+---
 
-### 1. 解析意图
+## 工作流（优先快路径）
 
-目标 App、操作、需回传信息。
+### A. 微信发消息（推荐，最快最稳）
 
-### 2. 生成 macrun goal
-
-| 规则 | 说明 |
-|------|------|
-| App 用常见名 | `Notes`/`备忘录`、`TextEdit`、`WeChat`/`微信`、`Safari` |
-| 中文输入 | 在 goal 中写明「用剪贴板粘贴」，禁止依赖直接打字中文 |
-| 微信 | 必须剪贴板方案（见下） |
-| 要回传的信息 | 写进 goal，便于 finish 摘要 |
-
-**通用 few-shot：**
-
-```
-用户：在 Mac 上打开备忘录，写一句「mac-assistant 测试」
-→ goal: 打开 Notes（备忘录）。新建或聚焦编辑区。用剪贴板粘贴文本：mac-assistant 测试。完成后在结果中说明已写入。
-```
-
-```
-用户：用电脑打开 TextEdit 输入 Hello
-→ goal: Open TextEdit, focus the document, type or paste "Hello", leave the window open, then finish.
-```
-
-### 微信 Mac（剪贴板 + 焦点）
-
-微信控件树常不完整；从 WorkBuddy/Cursor 启动时 **宿主会抢焦点**，macrun 会自动 `activate` 微信，goal 仍应写清楚：
-
-1. `open_app` WeChat **一次**（不要反复打开）  
-2. 若界面不对：`activate_app` WeChat  
-3. 搜索/输入：**clipboard_paste** + 回车；可用 hotkey（如 Cmd+F）  
-4. 禁止在 goal 里要求「只看 WorkBuddy」  
-
-```
-用户：用电脑打开微信，给联系人小明发：你好
-→ goal: 打开 WeChat。搜索联系人「小明」。粘贴正文「你好」并发送。
-```
-
-macrun 对「微信 + 联系人 + 正文」会自动走 **确定性脚本**（不逐步问视觉模型），更快更稳。  
-也可直接：
-
-```bash
-macrun wechat-send --contact "小明" --message "你好" -l /tmp/mac_assistant.log
-```
-
-### 3. 执行
+识别到：**微信 + 联系人 + 消息正文** → **不要**走长 goal + 视觉 Agent，直接：
 
 ```bash
 LOG_FILE="/tmp/mac_assistant.log"
-: > "$LOG_FILE"   # 可选：清空旧日志
-MACRUN_BIN="${MACRUN_BIN:-macrun}"
-# 若 PATH 无 macrun：
-# MACRUN_BIN="$REPO_ROOT/tools/macrun/venv/bin/macrun"
+: > "$LOG_FILE"
+MACRUN_BIN="${MACRUN_BIN:-$REPO_ROOT/tools/macrun/venv/bin/macrun}"
 CONFIG="${MACRUN_CONFIG:-$REPO_ROOT/tools/macrun/config.local.yaml}"
 
-# 只用 -l 写日志，不要再把 stdout 重定向到同一文件（会重复行）
-nohup "$MACRUN_BIN" run -c "$CONFIG" -l "$LOG_FILE" '<goal>' \
-  >/dev/null 2>&1 &
+"$MACRUN_BIN" wechat-send \
+  --contact "陈可欣" \
+  --message "老婆晚上好" \
+  -l "$LOG_FILE"
+# 前台跑即可（通常数秒）；也可用 nohup，但不要把 stdout 再重定向到同一日志
 ```
 
-### 4. 监控（最多约 10 分钟）
+**从用户话里抽出参数（你来抽，不要让 macrun 再猜）：**
 
-| 信号 | 含义 |
-|------|------|
-| `macrun start` | 启动 |
-| `FINISH:` / `✅ SUCCESS` | 成功 |
-| `FAIL:` / `❌ FAIL` | 失败 |
-| `Accessibility` / `未授权` | 权限问题 |
-| `PLACEHOLDER` / API Key | 配置问题 |
-| `Traceback` / `Error` | 异常 |
+| 用户说法 | `--contact` | `--message` |
+|----------|-------------|-------------|
+| 给陈可欣发：晚上好 | 陈可欣 | 晚上好 |
+| 打开微信找小明说你好 | 小明 | 你好 |
+| 微信给老婆发想你了 | 老婆/陈可欣（按用户称呼） | 想你了 |
 
-超时贴日志末尾约 30 行。
+日志成功信号：`wechat-script start` → `FINISH:` / `✅ SUCCESS`，并有 `+x.xxs` 分步耗时。
 
-### 5. 回复用户
+发送键可在 `config.local.yaml` 的 `wechat.send_mode` 配置：`both`（默认）| `enter` | `cmd_enter`。
+
+### B. 其它桌面任务（备忘录 / TextEdit 等）
+
+用 `macrun run`：
+
+```bash
+"$MACRUN_BIN" run -c "$CONFIG" -l "$LOG_FILE" \
+  '打开 Notes，用剪贴板粘贴：hello，然后 finish'
+```
+
+中文输入一律剪贴板；不要写死用户路径。
+
+### C. 监控与回复
+
+- 微信脚本：通常 **5–15 秒** 内结束；超时（>60s）贴日志  
+- 通用 run：最多约 10 分钟  
+- 回复格式：
 
 ```
 🖥️ 已执行：…
-📂 MACRUN: <路径>
 📋 结果：…
 ✅ 完成（耗时 …）
 ```
 
+---
+
 ## 注意事项
 
-- 策略：**AX 控件树为主，失败才截图**（由 macrun 自动处理）
-- 真实桌面操作，可能与用户抢鼠标；保持解锁
-- 危险操作（清空废纸篓等）应拒绝
-- 权限必须授予**实际拉起 macrun 的宿主 App**
+- 真实桌面操作会抢焦点；授权给 **WorkBuddy / 终端** 等实际宿主  
+- 微信 AX 极弱：发消息路径已脚本化，勿再用 click_xy 猜坐标  
+- 危险操作（清空废纸篓等）拒绝  
 
 ## 已知限制
 
-- 仅 macOS
-- 部分 Electron/游戏 App AX 残缺 → 依赖截图回退，成功率下降
-- 微信发消息受版本/布局影响，需剪贴板 few-shot
-- 需要多模态兼容 LLM API（默认火山 Doubao）
+- 仅 macOS  
+- 搜索同名联系人可能进错会话（脚本会 ↓ + Enter 选第一项）  
+- 发送模式因用户微信设置而异 → 调 `wechat.send_mode`  

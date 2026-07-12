@@ -75,16 +75,18 @@ def set_clipboard(text: str) -> str:
     return f"clipboard set ({len(text)} chars)"
 
 
-def ensure_front(app_name: str | None) -> None:
-    """动作前强制前置目标 App（LLM 思考期间 WorkBuddy 常抢回焦点）。"""
+def ensure_front(app_name: str | None, settle: float = 0.15) -> bool:
+    """动作前强制前置目标 App。返回是否调用了 activate。"""
     if not app_name:
-        return
+        return False
     app = resolve_app_name(app_name)
     try:
         ax.activate_app(name=app)
     except Exception:
         activate_app_by_name(app)
-    time.sleep(0.22)
+    if settle > 0:
+        time.sleep(settle)
+    return True
 
 
 def paste_clipboard() -> str:
@@ -92,47 +94,78 @@ def paste_clipboard() -> str:
     return "pasted clipboard (cmd+v)"
 
 
-def clipboard_type(text: str, app_name: str | None = None) -> str:
+def clipboard_type(
+    text: str,
+    app_name: str | None = None,
+    ensure: bool = True,
+) -> str:
     """中文/复杂文本：写入剪贴板并粘贴。"""
-    ensure_front(app_name)
+    if ensure:
+        ensure_front(app_name, settle=0.12)
     set_clipboard(text)
-    time.sleep(0.12)
-    paste_clipboard()
     time.sleep(0.08)
+    paste_clipboard()
+    time.sleep(0.05)
     return f"clipboard_typed ({len(text)} chars)"
 
 
-def type_text(text: str, prefer_clipboard: bool = True, app_name: str | None = None) -> str:
+def type_text(
+    text: str,
+    prefer_clipboard: bool = True,
+    app_name: str | None = None,
+    ensure: bool = True,
+) -> str:
     if not text:
         return "empty type"
     if prefer_clipboard or any(ord(c) > 127 for c in text):
-        return clipboard_type(text, app_name=app_name)
-    ensure_front(app_name)
+        return clipboard_type(text, app_name=app_name, ensure=ensure)
+    if ensure:
+        ensure_front(app_name, settle=0.12)
     ax.type_text_ascii(text)
     return f"typed ascii ({len(text)} chars)"
 
 
-def hotkey(*keys: str, app_name: str | None = None) -> str:
-    ensure_front(app_name)
-    time.sleep(0.08)
+def hotkey(
+    *keys: str,
+    app_name: str | None = None,
+    ensure: bool = True,
+    settle: float = 0.05,
+) -> str:
+    if ensure:
+        ensure_front(app_name, settle=0.12)
+    if settle > 0:
+        time.sleep(settle)
     ax.hotkey(*keys)
     return f"hotkey {'+'.join(keys)}"
 
 
-def send_chat(app_name: str | None = None) -> str:
-    """发送聊天消息：兼容微信「Enter 发送」与「Cmd+Enter 发送」两种设置。
+def send_chat(
+    app_name: str | None = None,
+    mode: str = "both",
+    ensure: bool = True,
+) -> str:
+    """发送聊天消息。
 
-    顺序：先 Cmd+Return，再单独 Return。动作前强制前置目标 App。
+    mode:
+      - both: 先 Cmd+Return 再 Return（默认，兼容两种微信设置）
+      - enter / return: 仅 Return
+      - cmd_enter: 仅 Cmd+Return
     """
-    ensure_front(app_name)
-    time.sleep(0.15)
-    # 设置：Enter 换行 / Cmd+Enter 发送
-    ax.hotkey("cmd", "return")
-    time.sleep(0.18)
-    # 设置：Enter 发送
-    ax.hotkey("return")
-    time.sleep(0.1)
-    return "send_chat: cmd+return then return (covers both WeChat send modes)"
+    mode = (mode or "both").lower().strip()
+    if mode in ("cmd+enter",):
+        mode = "cmd_enter"
+    if mode == "return":
+        mode = "enter"
+    if ensure:
+        ensure_front(app_name, settle=0.12)
+    time.sleep(0.08)
+    if mode in ("both", "cmd_enter"):
+        ax.hotkey("cmd", "return")
+        time.sleep(0.10)
+    if mode in ("both", "enter"):
+        ax.hotkey("return")
+        time.sleep(0.06)
+    return f"send_chat: mode={mode}"
 
 
 def click_node(node: dict[str, Any], pid: int | None = None) -> str:
