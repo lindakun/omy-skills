@@ -21,10 +21,16 @@ omy-skills/
 │   │   ├── SKILL.md          # WorkBuddy 技能定义
 │   │   └── INSTALL.md        # 安装指南
 │   └── pc-assistant/
-│       ├── SKILL.md          # WorkBuddy 技能定义
+│       ├── SKILL.md          # WorkBuddy 技能定义（路径：仓库 tools/ufo2，可回退 D:\tools）
 │       └── INSTALL.md        # 安装指南
 └── tools/
     ├── ufo2/                 # 魔改版 UFO² 源码（含 WeChat 兼容 + no-verify 优化）
+    │   └── MODIFICATIONS.md  # 相对上游的魔改清单
     └── mobilerun/
         └── config_multi_windows.yaml  # mobilerun 配置模板（替换 API Key 后使用）
 ```
+
+## 安全说明
+
+- 仓库内 API Key **仅为占位符**（如 `YOUR_VOLC_ARK_API_KEY`），请在本地运行目录填写真实 Key。
+- **不要**把含真实密钥的 `agents.yaml` / 配置提交到 git。

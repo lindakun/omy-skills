@@ -23,3 +23,12 @@ Thumbs.db
 
 # Runtime logs
 logs/
+
+# Local secrets / runtime (never commit real API keys)
+.env
+.env.*
+*.local.yaml
+agents.local.yaml
+tools/ufo2/venv/
+tools/ufo2/logs/
+tools/ufo2/config/ufo/agents.yaml.local

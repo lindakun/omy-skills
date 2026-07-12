@@ -16,19 +16,35 @@ agent_created: true
 
 **注意**：凡是涉及 "手机"/"手机上" 的操作，应使用 `mobile-assistant` 技能，而非本技能。
 
+## 路径约定（与 INSTALL.md 对齐）
+
+UFO² **源码以本仓库 `tools/ufo2` 为准**。本机执行前按下列顺序解析路径，使用**第一个同时满足**的组合：
+
+| 优先级 | `UFO_ROOT`（源码） | `UFO_PYTHON`（解释器） | 说明 |
+|--------|-------------------|------------------------|------|
+| 1 | 环境变量 `UFO_ROOT` | 环境变量 `UFO_PYTHON` | 显式覆盖，优先 |
+| 2 | `G:\github_pj\omy-skills\tools\ufo2` | `{UFO_ROOT}\venv\Scripts\python.exe` | 与 INSTALL 一致：仓库内源码 + 仓库内 venv |
+| 3 | `D:\tools\ufo2` | `D:\tools\ufo_venv\Scripts\python.exe` | 本机已有独立运行环境时的回退 |
+
+`set_clipboard.py` 路径一律为：`{UFO_ROOT}/scripts/set_clipboard.py`（在 request 里写正斜杠，如 `G:/github_pj/omy-skills/tools/ufo2/scripts/set_clipboard.py`）。
+
+**API 配置**：`{UFO_ROOT}/config/ufo/agents.yaml`  
+仓库内该文件仅为占位符 `YOUR_VOLC_ARK_API_KEY`。真实 Key 只应写在本地运行副本中，**禁止提交到 git**。
+
 ## 前置条件
 
-本技能依赖 UFO² 框架，执行前必须验证，不满足则直接提示用户：
+执行前必须验证，不满足则直接提示用户：
 
-1. **UFO² 源码目录**：`D:\tools\ufo2` —— 必须存在
-2. **虚拟环境**：`D:\tools\ufo_venv` —— 必须存在，且已安装全部依赖
-3. **Python 环境**：`D:\tools\ufo_venv\Scripts\python.exe` —— 必须存在
-4. **API 配置**：`D:\tools\ufo2\config\ufo\agents.yaml` —— 必须存在且包含有效的 API Key
-5. **重要：配置完整性检查**：`agents.yaml` 中**必须有**以下4个 agent 配置，否则对应 agent 会用默认 `azure_ad` 认证方式导致 AAD 报错：
-   - `HOST_AGENT` ✓（已配）
-   - `APP_AGENT` ✓（已配）
-   - `EVALUATION_AGENT` ✓（2026-07-11 已补充）
-   - `BACKUP_AGENT` ✓（2026-07-11 已补充）
+1. **UFO_ROOT 存在**（按上表解析后的目录）
+2. **UFO_PYTHON 存在**，且该环境已安装 UFO² 依赖（`pip install -r requirements.txt`）
+3. **API 配置**：`{UFO_ROOT}/config/ufo/agents.yaml` 存在，且 API Key **不是** `YOUR_VOLC_ARK_API_KEY` 占位符
+4. **配置完整性**：`agents.yaml` 中**必须有**以下 4 个 agent，否则会回落到默认 `azure_ad` 导致 AAD 报错：
+   - `HOST_AGENT`
+   - `APP_AGENT`
+   - `EVALUATION_AGENT`
+   - `BACKUP_AGENT`
+
+若优先级 2（仓库路径）缺少 venv 或 Key，而优先级 3（`D:\tools\...`）可用，则使用优先级 3，并在执行前简要告知用户当前选用的 `UFO_ROOT`。
 
 ## 工作流
 
@@ -55,16 +71,16 @@ agent_created: true
 | **request 尽量简洁** | 简洁指令减少 LLM token 处理时间，每少 50 个 token 约省 1-2s API 耗时 | "Step 1: set_clipboard to 'text'. Step 2: WeChat search contact, Ctrl+V, Enter." |
 | **标记 verify/no-verify** | 在步骤后标注 `[verify]`（需截图+LLM）或 `[no-verify]`（跳过截图直接执行），确定性步骤省 ~25s/步 | "Step 2 [no-verify]: click search box, Ctrl+V, Enter." |
 
-**示例映射（few-shot）：**
+**示例映射（few-shot）**（`CLIPBOARD` 表示 `{UFO_ROOT}/scripts/set_clipboard.py` 的绝对路径，正斜杠）：
 
 ```
 用户："用电脑打开微信，给孙振易发一首骚气的嘲讽诗句，备注是ai写的"
 → request: Complete the following task step by step:
-Step 1 [verify]: Use run_shell with wait_for_completion=True to execute: python D:/tools/ufo2/scripts/set_clipboard.py 要发送的完整诗句
+Step 1 [verify]: Use run_shell with wait_for_completion=True to execute: python CLIPBOARD 要发送的完整诗句
 This sets the Windows clipboard to the poem text.
 备注：ai写的
 Step 2 [no-verify]: Open WeChat(微信), click on the search box, use keyboard shortcut Ctrl+V (keyboard_input with control_focus=False) to paste the contact name "孙振易" from clipboard into the search box, then press Enter to search. Click on the "孙振易" contact to open the chat window.
-Step 3 [verify]: Use run_shell with wait_for_completion=True to execute: python D:/tools/ufo2/scripts/set_clipboard.py 完整的诗句内容
+Step 3 [verify]: Use run_shell with wait_for_completion=True to execute: python CLIPBOARD 完整的诗句内容
 Step 4 [no-verify]: Click on the chat input box to focus it, then use keyboard shortcut Ctrl+V (keyboard_input with control_focus=False) to paste the text from clipboard, then press Enter to send.
 IMPORTANT: Do NOT use set_edit_text. Do NOT use Notepad. All text must go through clipboard via set_clipboard.py script.
 ```
@@ -83,14 +99,14 @@ IMPORTANT: Do NOT use set_edit_text. Do NOT use Notepad. All text must go throug
 
 微信使用自定义 Win32 控件，UFO² 的 `set_edit_text` 全部失败。所有文字输入必须通过**剪贴板脚本**，键盘只用于快捷键（Ctrl+V / Enter）。
 
-**前置要求（已完成）：**
-1. 脚本：`D:\tools\ufo2\scripts\set_clipboard.py`（通过 `sys.argv` 动态接收文本）
+**前置要求：**
+1. 脚本：`{UFO_ROOT}/scripts/set_clipboard.py`（通过 `sys.argv` 动态接收文本）
 2. `python` 已加入 `cli_mcp_server.py` 白名单
 3. `run_shell` 已改为同步等待 + 返回输出
 
 **完整工作流模板（推荐使用 [verify]/[no-verify] 标记加速）：**
 ```
-Step 1 [verify]: Use run_shell with wait_for_completion=True to execute: python D:/tools/ufo2/scripts/set_clipboard.py 联系人名称
+Step 1 [verify]: Use run_shell with wait_for_completion=True to execute: python CLIPBOARD 联系人名称
 Step 2 [no-verify]: WeChat click search box, Ctrl+V, Enter, click contact.
 Step 3 [verify]: Use run_shell to set clipboard to message text.
 Step 4 [no-verify]: Click chat input, Ctrl+V, Enter.
@@ -106,12 +122,16 @@ IMPORTANT: Do NOT use set_edit_text. Do NOT use Notepad. All text via clipboard 
 
 ### 步骤 3：执行 UFO²
 
-在 UFO² 源码目录下，用虚拟环境 Python 执行：
+先按「路径约定」解析出 `UFO_ROOT` 与 `UFO_PYTHON`，再执行（Git Bash / MSYS 风格路径示例；Windows 路径需按解析结果替换）：
 
 ```bash
 LOG_FILE="C:/Users/Administrator/AppData/Local/Temp/ufo_assistant.log"
-cd /d/tools/ufo2 && \
-  /d/tools/ufo_venv/Scripts/python.exe -u -m ufo \
+# 将下面两处替换为实际解析结果，例如：
+# UFO_ROOT_MSYS="/g/github_pj/omy-skills/tools/ufo2"
+# UFO_PYTHON_WIN="G:/github_pj/omy-skills/tools/ufo2/venv/Scripts/python.exe"
+# 或回退：UFO_ROOT_MSYS="/d/tools/ufo2"  UFO_PYTHON_WIN="D:/tools/ufo_venv/Scripts/python.exe"
+cd "$UFO_ROOT_MSYS" && \
+  "$UFO_PYTHON_WIN" -u -m ufo \
     --task "pc-$(date +%Y%m%d-%H%M%S)" \
     -r '<request>' \
     > "$LOG_FILE" 2>&1
@@ -122,6 +142,7 @@ cd /d/tools/ufo2 && \
 - 使用 `run_in_background=true` 后台运行
 - 日志文件固定路径：`C:\Users\Administrator\AppData\Local\Temp\ufo_assistant.log`
 - 执行前确认日志目录存在：`mkdir -p /c/Users/Administrator/AppData/Local/Temp`
+- 执行前在对话中注明实际使用的 `UFO_ROOT`（便于排查「改了仓库却跑的是 D 盘旧副本」）
 
 ### 步骤 4：监控并解析结果
 
@@ -152,6 +173,7 @@ cd /d/tools/ufo2 && \
 
 ```
 🖥️ 已执行：打开微信 → 找到孙振易 → 发送骚气诗句
+📂 UFO_ROOT: G:\github_pj\omy-skills\tools\ufo2
 
 📋 执行结果：
 [UFO² 返回的成功/失败信息]
@@ -174,6 +196,7 @@ cd /d/tools/ufo2 && \
 - UFO² 安全防护可能在敏感操作前弹确认框，需用户在屏幕前确认
 - UFO² 在当前桌面操作，无画中画隔离，可能干扰用户正常使用
 - 每步操作都调用 LLM，延迟较高，需耐心等待
+- **改代码后**：若实际跑的是 `D:\tools\ufo2`，需把仓库改动同步过去，否则看不到效果
 
 ## 已踩坑 & 解决方案
 
@@ -182,6 +205,7 @@ cd /d/tools/ufo2 && \
 | 1 | Evaluation Agent 报 AAD 错 / 评估报错后任务仍被判定成功 | `agents.yaml` 缺 `EVALUATION_AGENT`/`BACKUP_AGENT` 配置；评估是独立后处理，不影响核心操作 | 已补充配置（同火山引擎）。日志中核心操作有 `✅ SUCCESS` 即为成功，评估报错可忽略 |
 | 2 | 微信中 `set_edit_text` 全部失败 | 微信使用自定义 Win32 控件，UIA `control_dict` 点击后丢失，报 `No application windows available` | **优选方案**：剪贴板脚本 + `keyboard_input` Ctrl+V（见上方微信工作流）。**兜底**：记事本写入→Ctrl+A→Ctrl+C 复制到剪贴板后同样操作 |
 | 3 | 启动时 `CustomizedAgent (not in config)` | UFO² 尝试加载未配置的第三方 agent | 无害警告，可忽略 |
+| 4 | 改了仓库 `tools/ufo2` 但行为不变 | 实际进程跑在 `D:\tools\ufo2` 旧副本 | 按路径优先级检查；或同步/ junction 两边目录 |
 
 ## 已知限制
 
