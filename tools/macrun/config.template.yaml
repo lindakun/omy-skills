@@ -25,22 +25,23 @@ agent:
   ax_max_depth: 6
   step_delay: 0.35
 
-# 微信确定性脚本（macrun wechat-send / run 识别到发消息 goal 时）
+# 微信：脚本推进 + 关卡式视觉（Gate1 选人 / Gate2 发送校验）
 wechat:
-  # 发送键：both（默认，Cmd+Enter 再 Enter）| enter | cmd_enter
+  # 发送键：both | enter | cmd_enter
   send_mode: both
-  # 搜索快捷键
+  # 是否启用视觉 Gate（失败直接 FAIL，不盲进）
+  gates_enabled: true
+  # Gate 视觉超时/压缩（独立于通用 agent 截图，避免过慢）
+  gate_timeout: 60
+  gate_max_side: 960
+  gate_jpeg_quality: 45
   search_hotkey: [cmd, f]
-  # 搜索后先按 ↓ 再 Enter 选第一项
-  select_with_down: true
-  # 是否额外再按一次 Enter（防停在搜索列表）
-  select_extra_enter: true
-  # 各阶段等待（秒）— 可按机器手感再调小
+  # 各阶段等待（秒）
   open_sleep: 0.35
-  search_sleep: 0.28
-  after_contact_sleep: 0.28
-  after_select_sleep: 0.40
-  after_message_sleep: 0.22
+  search_sleep: 0.35
+  after_contact_sleep: 0.35
+  after_select_sleep: 0.45
+  after_message_sleep: 0.25
 
 safety:
   # 命中这些词时拒绝执行（可继续扩展）

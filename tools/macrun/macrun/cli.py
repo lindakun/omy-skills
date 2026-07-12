@@ -99,7 +99,7 @@ def cmd_dump_tree(args: argparse.Namespace) -> int:
 
 
 def cmd_wechat_send(args: argparse.Namespace) -> int:
-    from macrun.wechat import send_message
+    from macrun.wechat import normalize_message, send_message
 
     log_path = args.log
     log_file = open(log_path, "a", encoding="utf-8") if log_path else None
@@ -112,7 +112,11 @@ def cmd_wechat_send(args: argparse.Namespace) -> int:
             print(msg, flush=True)
 
     try:
-        result = send_message(args.contact, args.message, log=_log)
+        result = send_message(
+            args.contact,
+            normalize_message(args.message),
+            log=_log,
+        )
     finally:
         if log_file:
             log_file.close()

@@ -65,9 +65,13 @@ CONFIG="${MACRUN_CONFIG:-$REPO_ROOT/tools/macrun/config.local.yaml}"
 | 打开微信找小明说你好 | 小明 | 你好 |
 | 微信给老婆发想你了 | 老婆/陈可欣（按用户称呼） | 想你了 |
 
-日志成功信号：`wechat-script start` → `FINISH:` / `✅ SUCCESS`，并有 `+x.xxs` 分步耗时。
+日志成功信号：`wechat-script start` → `gate1 result matched=True` → `gate2 result sent=True` → `FINISH:` / `✅ SUCCESS`。
 
-发送键可在 `config.local.yaml` 的 `wechat.send_mode` 配置：`both`（默认）| `enter` | `cmd_enter`。
+- Gate1：搜索后视觉确认目标联系人在列表中的第几行，再按对应次数 ↓ + Enter（**匹配失败直接 FAIL，不盲进**）
+- Gate2：发送后视觉确认是否在会话且输入框大致清空（失败会换发送键重试一次，仍失败则 FAIL）
+
+发送键：`wechat.send_mode` = `both` | `enter` | `cmd_enter`。  
+可关闸门调试：`wechat.gates_enabled: false`（不推荐）。
 
 ### B. 其它桌面任务（备忘录 / TextEdit 等）
 
