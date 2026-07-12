@@ -8,7 +8,7 @@ llm:
   model: doubao-seed-2-1-turbo-260628
   temperature: 0.1
   max_tokens: 1200
-  timeout: 120
+  timeout: 30  # 每步 LLM 请求超时（秒）
 
 agent:
   max_steps: 20

@@ -289,7 +289,7 @@ def run_goal(
     model = str(llm.get("model") or "gpt-4o")
     temperature = float(llm.get("temperature") or 0.1)
     max_tokens = int(llm.get("max_tokens") or 1200)
-    timeout = float(llm.get("timeout") or 120)
+    timeout = float(llm.get("timeout") or 30)
 
     client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
 
