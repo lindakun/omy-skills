@@ -109,10 +109,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         log_file = open(log_path, "a", encoding="utf-8")
 
     def _log(msg: str) -> None:
-        print(msg, flush=True)
+        # 有 -l 时只写文件，避免与 shell 重定向到同一文件导致重复行
         if log_file:
             log_file.write(msg + "\n")
             log_file.flush()
+        else:
+            print(msg, flush=True)
 
     try:
         result = run_goal(goal, config_path=args.config, log=_log)
@@ -121,11 +123,21 @@ def cmd_run(args: argparse.Namespace) -> int:
             log_file.close()
 
     status = result.get("status")
+    # 结果摘要始终打 stdout（便于 nohup 重定向或前台看）
     if status == "success":
-        print(f"✅ SUCCESS: {result.get('result')}")
-        return 0
-    print(f"❌ FAIL: {result.get('reason') or result}")
-    return 1
+        line = f"✅ SUCCESS: {result.get('result')}"
+    else:
+        line = f"❌ FAIL: {result.get('reason') or result}"
+    print(line, flush=True)
+    if log_file is None and log_path:
+        pass
+    elif log_path:
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+    return 0 if status == "success" else 1
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -89,6 +89,123 @@ def frontmost_app_info() -> dict[str, Any]:
     }
 
 
+# 宿主 IDE / Agent 名：观察时应避免误当成目标桌面 App
+HOST_APP_MARKERS = (
+    "workbuddy",
+    "cursor",
+    "code",
+    "visual studio code",
+    "terminal",
+    "iterm",
+    "warp",
+    "claude",
+    "electron",  # 部分壳
+)
+
+
+def list_running_apps() -> list[dict[str, Any]]:
+    """列出前台可激活的运行中 App。"""
+    require_darwin()
+    if not _AX_OK:
+        raise RuntimeError(_ERR)
+    out: list[dict[str, Any]] = []
+    for app in NSWorkspace.sharedWorkspace().runningApplications():
+        try:
+            if app.isTerminated():
+                continue
+            # 0 = regular, 1 = accessory, 2 = prohibited
+            pol = int(app.activationPolicy()) if hasattr(app, "activationPolicy") else 0
+            if pol != 0:
+                continue
+            name = str(app.localizedName() or "")
+            bid = str(app.bundleIdentifier() or "")
+            if not name and not bid:
+                continue
+            out.append(
+                {
+                    "name": name,
+                    "bundle_id": bid,
+                    "pid": int(app.processIdentifier()),
+                    "active": bool(app.isActive()),
+                }
+            )
+        except Exception:
+            continue
+    return out
+
+
+def find_app(
+    name: str | None = None,
+    bundle_id: str | None = None,
+) -> dict[str, Any] | None:
+    """按名称/bundle 模糊查找运行中 App。"""
+    name_l = (name or "").lower().strip()
+    bid_l = (bundle_id or "").lower().strip()
+    # 别名
+    aliases = {
+        "wechat": ["wechat", "微信", "com.tencent.xinwechat"],
+        "微信": ["wechat", "微信", "com.tencent.xinwechat"],
+        "notes": ["notes", "备忘录", "com.apple.notes"],
+        "备忘录": ["notes", "备忘录", "com.apple.notes"],
+        "textedit": ["textedit", "文本编辑", "com.apple.textedit"],
+    }
+    keys = aliases.get(name_l, [name_l] if name_l else [])
+    if bid_l:
+        keys.append(bid_l)
+
+    apps = list_running_apps()
+    for app in apps:
+        blob = f"{app.get('name','')} {app.get('bundle_id','')}".lower()
+        for k in keys:
+            if k and k in blob:
+                return app
+        if name_l and name_l in blob:
+            return app
+    return None
+
+
+def activate_app(pid: int | None = None, name: str | None = None) -> dict[str, Any]:
+    """前置指定 App（解决 WorkBuddy 等宿主抢走焦点后 AX 仍读宿主的问题）。"""
+    require_darwin()
+    if not _AX_OK:
+        raise RuntimeError(_ERR)
+
+    target = None
+    if pid is not None:
+        for app in NSWorkspace.sharedWorkspace().runningApplications():
+            if int(app.processIdentifier()) == int(pid):
+                target = app
+                break
+    if target is None and name:
+        info = find_app(name=name)
+        if info:
+            for app in NSWorkspace.sharedWorkspace().runningApplications():
+                if int(app.processIdentifier()) == int(info["pid"]):
+                    target = app
+                    break
+    if target is None:
+        raise RuntimeError(f"activate_app: not found pid={pid} name={name}")
+
+    # NSApplicationActivateIgnoringOtherApps = 1 << 1 = 2
+    ok = target.activateWithOptions_(2)
+    import time
+
+    time.sleep(0.45)
+    return {
+        "name": str(target.localizedName() or ""),
+        "bundle_id": str(target.bundleIdentifier() or ""),
+        "pid": int(target.processIdentifier()),
+        "activated": bool(ok),
+    }
+
+
+def is_host_app(info: dict[str, Any] | None) -> bool:
+    if not info:
+        return False
+    blob = f"{info.get('name','')} {info.get('bundle_id','')}".lower()
+    return any(m in blob for m in HOST_APP_MARKERS)
+
+
 def _copy_attr(element, attr) -> Any:
     err, value = AXUIElementCopyAttributeValue(element, attr, None)
     if err != kAXErrorSuccess:

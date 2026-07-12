@@ -77,31 +77,33 @@ metadata:
 → goal: Open TextEdit, focus the document, type or paste "Hello", leave the window open, then finish.
 ```
 
-### 微信 Mac（剪贴板方案）
+### 微信 Mac（剪贴板 + 焦点）
 
-微信控件树常不完整。流程：
+微信控件树常不完整；从 WorkBuddy/Cursor 启动时 **宿主会抢焦点**，macrun 会自动 `activate` 微信，goal 仍应写清楚：
 
-1. `open_app` WeChat / 微信  
-2. 需要输入的文本一律 **clipboard_paste**（pbcopy + Cmd+V）  
-3. 搜索联系人、发送：热键/点击 + 粘贴，避免 `type` 中文  
-4. AX 失败时依赖 macrun 自动截图重试  
+1. `open_app` WeChat **一次**（不要反复打开）  
+2. 若界面不对：`activate_app` WeChat  
+3. 搜索/输入：**clipboard_paste** + 回车；可用 hotkey（如 Cmd+F）  
+4. 禁止在 goal 里要求「只看 WorkBuddy」  
 
 ```
 用户：用电脑打开微信，给联系人小明发：你好
-→ goal: 打开 WeChat。用剪贴板粘贴「小明」到搜索框并回车选中联系人。再用剪贴板粘贴「你好」到输入框并发送。完成后续在结果中说明是否已发送。全程中文输入必须用剪贴板粘贴，不要直接 type 中文。
+→ goal: 打开 WeChat 一次并保持微信在最前。用剪贴板粘贴「小明」到搜索框并回车选中联系人。再用剪贴板粘贴「你好」到输入框并发送。全程中文必须 clipboard_paste。不要反复 open_app。完成后说明是否已发送。
 ```
 
 ### 3. 执行
 
 ```bash
 LOG_FILE="/tmp/mac_assistant.log"
+: > "$LOG_FILE"   # 可选：清空旧日志
 MACRUN_BIN="${MACRUN_BIN:-macrun}"
 # 若 PATH 无 macrun：
 # MACRUN_BIN="$REPO_ROOT/tools/macrun/venv/bin/macrun"
 CONFIG="${MACRUN_CONFIG:-$REPO_ROOT/tools/macrun/config.local.yaml}"
 
+# 只用 -l 写日志，不要再把 stdout 重定向到同一文件（会重复行）
 nohup "$MACRUN_BIN" run -c "$CONFIG" -l "$LOG_FILE" '<goal>' \
-  >>"$LOG_FILE" 2>&1 &
+  >/dev/null 2>&1 &
 ```
 
 ### 4. 监控（最多约 10 分钟）

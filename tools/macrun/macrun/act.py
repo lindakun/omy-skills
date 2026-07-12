@@ -10,41 +10,62 @@ from typing import Any
 from macrun import ax
 
 
+APP_ALIASES = {
+    "wechat": "WeChat",
+    "微信": "WeChat",
+    "notes": "Notes",
+    "备忘录": "Notes",
+    "textedit": "TextEdit",
+    "文本编辑": "TextEdit",
+    "safari": "Safari",
+    "finder": "Finder",
+    "访达": "Finder",
+    "terminal": "Terminal",
+    "终端": "Terminal",
+}
+
+
+def resolve_app_name(name: str) -> str:
+    name = name.strip()
+    return APP_ALIASES.get(name.lower(), APP_ALIASES.get(name, name))
+
+
 def open_app(name: str) -> str:
-    """用 open -a 打开应用（支持中文名如「微信」「备忘录」）。"""
+    """用 open -a 打开并强制激活应用（避免 WorkBuddy 等宿主抢焦点）。"""
     name = name.strip()
     if not name:
         raise ValueError("open_app: empty name")
-    # 常见别名
-    aliases = {
-        "wechat": "WeChat",
-        "微信": "WeChat",
-        "notes": "Notes",
-        "备忘录": "Notes",
-        "textedit": "TextEdit",
-        "文本编辑": "TextEdit",
-        "safari": "Safari",
-        "finder": "Finder",
-        "访达": "Finder",
-        "terminal": "Terminal",
-        "终端": "Terminal",
-    }
-    app = aliases.get(name.lower(), aliases.get(name, name))
+    app = resolve_app_name(name)
     r = subprocess.run(
         ["open", "-a", app],
         capture_output=True,
         text=True,
     )
     if r.returncode != 0:
-        # 再试原始名
         r2 = subprocess.run(["open", "-a", name], capture_output=True, text=True)
         if r2.returncode != 0:
             raise RuntimeError(
                 f"open_app failed: {r.stderr or r2.stderr or r.stdout or 'unknown'}"
             )
         app = name
-    time.sleep(0.8)
-    return f"opened {app}"
+    time.sleep(0.9)
+    # 强制前置：open 后宿主进程常仍是 frontmost，导致 AX 只看到 WorkBuddy
+    info = None
+    try:
+        info = ax.activate_app(name=app)
+    except Exception:
+        try:
+            activate_app_by_name(app)
+            time.sleep(0.4)
+            info = ax.find_app(name=app)
+        except Exception:
+            info = ax.find_app(name=app)
+    if info:
+        return (
+            f"opened+activated {info.get('name') or app} "
+            f"pid={info.get('pid')} bundle={info.get('bundle_id')}"
+        )
+    return f"opened {app} (activate pending; app may still be launching)"
 
 
 def set_clipboard(text: str) -> str:
