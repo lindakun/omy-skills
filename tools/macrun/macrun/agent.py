@@ -12,6 +12,7 @@ from openai import OpenAI
 
 from macrun import act, ax, vision
 from macrun.config import api_key_is_placeholder, load_config, resolve_api_key
+from macrun.wechat import is_wechat_send_goal, parse_contact_and_message, send_message
 
 SYSTEM_PROMPT = """你是 macOS 桌面自动化控制器。根据用户 goal 与当前 Accessibility(AX) 控件树，每步只输出 **一个** JSON 动作（不要 markdown 围栏）。
 
@@ -339,6 +340,14 @@ def run_goal(
     if not ax.is_trusted():
         _log("WARN: Accessibility not trusted — actions may fail")
 
+    # 微信发消息：走确定性脚本，避免视觉 LLM 乱点 / 卡在第 2 步
+    if is_wechat_send_goal(goal):
+        contact, message = parse_contact_and_message(goal)
+        _log(f"wechat-script mode contact={contact!r} message_len={len(message or '')}")
+        if contact and message:
+            return send_message(contact, message, log=_log)
+        _log("wechat-script: parse failed, fallback to LLM agent")
+
     history: list[dict[str, Any]] = []
     last_error: str | None = None
     force_screenshot = False
@@ -428,6 +437,10 @@ def run_goal(
 
         try:
             req_timeout = vision_timeout if image_b64 else timeout
+            _log(
+                f"STEP {step} calling LLM "
+                f"(vision={'yes' if image_b64 else 'no'}, timeout={req_timeout}s)"
+            )
             raw = _llm_decide(
                 client,
                 model,

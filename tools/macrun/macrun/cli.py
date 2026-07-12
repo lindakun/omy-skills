@@ -98,6 +98,41 @@ def cmd_dump_tree(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_wechat_send(args: argparse.Namespace) -> int:
+    from macrun.wechat import send_message
+
+    log_path = args.log
+    log_file = open(log_path, "a", encoding="utf-8") if log_path else None
+
+    def _log(msg: str) -> None:
+        if log_file:
+            log_file.write(msg + "\n")
+            log_file.flush()
+        else:
+            print(msg, flush=True)
+
+    try:
+        result = send_message(args.contact, args.message, log=_log)
+    finally:
+        if log_file:
+            log_file.close()
+
+    status = result.get("status")
+    line = (
+        f"✅ SUCCESS: {result.get('result')}"
+        if status == "success"
+        else f"❌ FAIL: {result.get('reason') or result}"
+    )
+    print(line, flush=True)
+    if log_path:
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+    return 0 if status == "success" else 1
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     goal = args.goal
     if not goal:
@@ -158,6 +193,12 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("-c", "--config", help="Path to config yaml")
     r.add_argument("-l", "--log", help="Append log file path")
     r.set_defaults(func=cmd_run)
+
+    w = sub.add_parser("wechat-send", help="Deterministic WeChat send (no vision LLM)")
+    w.add_argument("--contact", "-t", required=True, help="Contact name")
+    w.add_argument("--message", "-m", required=True, help="Message text")
+    w.add_argument("-l", "--log", help="Append log file path")
+    w.set_defaults(func=cmd_wechat_send)
 
     return p
 

@@ -88,7 +88,14 @@ metadata:
 
 ```
 用户：用电脑打开微信，给联系人小明发：你好
-→ goal: 打开 WeChat 一次并保持最前。Cmd+F 搜索，剪贴板粘贴「小明」后回车选中联系人。剪贴板粘贴正文「你好」后必须用 send 动作发送（Cmd+Enter 再 Enter，不要只按 Enter）。不要反复 open_app。完成后说明是否已发送。
+→ goal: 打开 WeChat。搜索联系人「小明」。粘贴正文「你好」并发送。
+```
+
+macrun 对「微信 + 联系人 + 正文」会自动走 **确定性脚本**（不逐步问视觉模型），更快更稳。  
+也可直接：
+
+```bash
+macrun wechat-send --contact "小明" --message "你好" -l /tmp/mac_assistant.log
 ```
 
 ### 3. 执行
