@@ -88,6 +88,8 @@ def _llm_decide(
     temperature: float,
     max_tokens: int,
     image_b64: str | None = None,
+    image_mime: str = "jpeg",
+    timeout: float = 30,
 ) -> str:
     msgs = list(messages)
     if image_b64:
@@ -100,7 +102,9 @@ def _llm_decide(
                     {"type": "text", "text": content},
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                        "image_url": {
+                            "url": f"data:image/{image_mime};base64,{image_b64}",
+                        },
                     },
                 ],
             }
@@ -110,6 +114,7 @@ def _llm_decide(
         messages=msgs,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout=timeout,
     )
     return (resp.choices[0].message.content or "").strip()
 
@@ -303,6 +308,9 @@ def run_goal(
     step_delay = float(agent_cfg.get("step_delay") or 0.35)
     shot_on_fail = bool(agent_cfg.get("screenshot_on_failure", True))
     shot_when_empty = bool(agent_cfg.get("screenshot_when_tree_empty", True))
+    sparse_every = int(agent_cfg.get("sparse_ax_screenshot_every") or 3)
+    shot_max_side = int(agent_cfg.get("screenshot_max_side") or 1280)
+    shot_quality = int(agent_cfg.get("screenshot_jpeg_quality") or 55)
 
     base_url = str(llm.get("api_base") or "https://api.openai.com/v1").rstrip("/")
     if base_url.endswith("/chat/completions"):
@@ -311,8 +319,10 @@ def run_goal(
     temperature = float(llm.get("temperature") or 0.1)
     max_tokens = int(llm.get("max_tokens") or 1200)
     timeout = float(llm.get("timeout") or 30)
+    vision_timeout = float(llm.get("vision_timeout") or 90)
 
-    client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+    # 客户端默认用较长上限；单次请求再按是否带图覆盖
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=max(timeout, vision_timeout))
 
     state: dict[str, Any] = {
         "target_app": _infer_target_app(goal),
@@ -360,19 +370,40 @@ def run_goal(
             need_shot = True
         if last_error and shot_on_fail:
             need_shot = True
-        # 微信等 AX 极稀疏：节点过少视为「树不可用」，自动截图（仍非每步全量截图策略的例外）
+        # 微信等 AX 极稀疏：不要每步截图（视觉请求慢，30s 易超时）；首步/失败/每 N 步
         tname = str(state.get("target_app") or app_info.get("name") or "").lower()
-        if any(k in tname for k in ("wechat", "微信")) and len(nodes) < 12:
-            need_shot = True
-            if step == 1 or len(nodes) < 12:
-                _log(f"STEP {step} sparse AX for WeChat (nodes={len(nodes)}), attach screenshot")
+        sparse_app = any(k in tname for k in ("wechat", "微信"))
+        if sparse_app and len(nodes) < 12:
+            if (
+                force_screenshot
+                or last_error
+                or step == 1
+                or (sparse_every > 0 and step % sparse_every == 0)
+            ):
+                need_shot = True
+                _log(
+                    f"STEP {step} sparse AX (nodes={len(nodes)}), "
+                    f"attach compressed screenshot"
+                )
+            else:
+                _log(
+                    f"STEP {step} sparse AX (nodes={len(nodes)}), "
+                    f"skip screenshot (every {sparse_every} steps)"
+                )
         force_screenshot = False
 
         image_b64 = None
+        image_mime = "jpeg"
         if need_shot:
             try:
-                image_b64 = vision.capture_b64()
-                _log(f"STEP {step} screenshot attached (failure/empty tree path)")
+                image_b64, image_mime = vision.capture_b64(
+                    max_side=shot_max_side,
+                    quality=shot_quality,
+                )
+                _log(
+                    f"STEP {step} screenshot attached "
+                    f"(mime={image_mime}, timeout={vision_timeout}s)"
+                )
             except Exception as e:
                 _log(f"STEP {step} screenshot failed: {e}")
 
@@ -396,6 +427,7 @@ def run_goal(
         ]
 
         try:
+            req_timeout = vision_timeout if image_b64 else timeout
             raw = _llm_decide(
                 client,
                 model,
@@ -403,6 +435,8 @@ def run_goal(
                 temperature,
                 max_tokens,
                 image_b64=image_b64,
+                image_mime=image_mime,
+                timeout=req_timeout,
             )
             action = _parse_action(raw)
         except Exception as e:
@@ -410,7 +444,8 @@ def run_goal(
             _log(f"STEP {step} {last_error}")
             if shot_on_fail:
                 force_screenshot = True
-            time.sleep(step_delay)
+            # 超时后稍等再试，避免连打
+            time.sleep(max(step_delay, 0.8))
             continue
 
         _log(f"STEP {step} action={json.dumps(action, ensure_ascii=False)}")
