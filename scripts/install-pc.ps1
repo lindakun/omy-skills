@@ -31,6 +31,8 @@ $root = Resolve-RepoRoot -Hint $RepoRoot
 $ufoRoot = Join-Path $root "tools\ufo2"
 $venvPython = Join-Path $ufoRoot "venv\Scripts\python.exe"
 $agentsYaml = Join-Path $ufoRoot "config\ufo\agents.yaml"
+$agentsTemplate = Join-Path $ufoRoot "config\ufo\agents.yaml.template"
+$clipboardScript = Join-Path $ufoRoot "scripts\set_clipboard.py"
 
 Write-Host "==> Repo root: $root"
 Write-Host "==> UFO root:  $ufoRoot"
@@ -40,6 +42,19 @@ $pyVer = & $Python -c "import sys; print(f'{sys.version_info.major}.{sys.version
 Write-Host "==> Python:    $pyVer ($Python)"
 if ($pyVer -notmatch '^3\.11') {
     Write-Warning "UFO² works best with Python 3.11. Current: $pyVer. Continue anyway..."
+}
+
+# Ensure agents.yaml exists (from template if needed)
+if (-not (Test-Path $agentsYaml)) {
+    if (-not (Test-Path $agentsTemplate)) {
+        throw "Missing both agents.yaml and agents.yaml.template under config\ufo"
+    }
+    Copy-Item -LiteralPath $agentsTemplate -Destination $agentsYaml -Force
+    Write-Host "==> Created config/ufo/agents.yaml from template"
+}
+
+if (-not (Test-Path $clipboardScript)) {
+    Write-Warning "Missing scripts/set_clipboard.py — WeChat clipboard flow will not work"
 }
 
 Push-Location $ufoRoot
@@ -57,9 +72,6 @@ try {
     & $pip install -r requirements.txt
 
     if ($ApiKey) {
-        if (-not (Test-Path $agentsYaml)) {
-            throw "Missing $agentsYaml"
-        }
         $content = Get-Content -Raw -LiteralPath $agentsYaml
         if ($content -match 'YOUR_VOLC_ARK_API_KEY') {
             $content = $content -replace 'YOUR_VOLC_ARK_API_KEY', $ApiKey

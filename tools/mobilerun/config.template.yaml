@@ -1,9 +1,12 @@
 # -*- yaml -*-
-# DEPRECATED: 请改用同目录 config.template.yaml（主机 OS 无关）。
-# 本文件仅为向后兼容保留，内容与 config.template.yaml 同步。
-# 新脚本优先读取 config.template.yaml。
-#
+# config.template.yaml
 # 主机 OS 无关 — 控制 Android 设备（macOS / Windows / Linux 通用）
+#
+# 用法：
+#   1. 复制为 config.local.yaml（已被仓库 *.local.yaml 忽略，勿提交含真实 Key 的文件）
+#   2. 替换 YOUR_VOLC_ARK_API_KEY / YOUR_ADB_SERIAL
+#   3. export MOBILERUN_CONFIG=/path/to/omy-skills/tools/mobilerun/config.local.yaml
+#   或：mobilerun run -c /path/to/config.local.yaml "goal"
 #
 # 切换视觉模型：修改 _active_vision_model 中的 <<: *xxx
 # 切换文本模型：修改 _active_text_model 中的 <<: *xxx

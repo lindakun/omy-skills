@@ -38,11 +38,14 @@
 | `EVA_SESSION` / `EVA_ALL_SCREENSHOTS` | → **False** | 跳过易崩的评估链路 |
 | `MCP_TOOL_TIMEOUT` | 30 → **10** | 适配 `set_clipboard.py`（&lt;2s） |
 
-### 2. 配置：`config/ufo/agents.yaml`
+### 2. 配置：`config/ufo/agents.yaml.template` → 本地 `agents.yaml`
 
-- 四个 agent 均配置：`HOST_AGENT` / `APP_AGENT` / `EVALUATION_AGENT` / `BACKUP_AGENT`
-- `API_TYPE: openai` 兼容协议，`API_BASE` 指向火山方舟
-- **仓库内 API Key 仅为占位符** `YOUR_VOLC_ARK_API_KEY`，真实 Key 只写本地运行目录
+- 仓库跟踪 **template**；`agents.yaml` 由 `install-pc.ps1` 复制生成（`tools/ufo2/.gitignore` 已忽略，防误提交 Key）
+- 四个 agent：`HOST_AGENT` / `APP_AGENT` / `EVALUATION_AGENT` / `BACKUP_AGENT`
+- `API_TYPE: openai` 兼容协议，`API_BASE` 为 `https://ark.cn-beijing.volces.com/api/v3`
+- 默认模型：`doubao-seed-2-1-turbo-260628`（BACKUP 用 lite）
+- **不在 agents.yaml 重复** `MAX_TOKENS` / `MAX_RETRY` 等全局项（以 `system.yaml` 为准）
+- Key 占位符：`YOUR_VOLC_ARK_API_KEY`
 
 ### 3. 依赖：`requirements.txt`
 

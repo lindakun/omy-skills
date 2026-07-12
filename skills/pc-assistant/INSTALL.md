@@ -34,9 +34,10 @@ cd omy-skills
 
 脚本会：
 
-1. 定位仓库根并设置用户环境变量 `OMY_SKILLS_ROOT`
-2. 在 `tools/ufo2` 创建 `venv` 并 `pip install -r requirements.txt`
-3. 把 API Key 写入本地 `tools/ufo2/config/ufo/agents.yaml`（**请勿 commit 该文件若含真实 Key**）
+1. 定位仓库根并设置用户环境变量 `OMY_SKILLS_ROOT` / `UFO_ROOT`
+2. 若缺少 `agents.yaml`，从 `agents.yaml.template` 复制生成（`agents.yaml` 被 ufo2 `.gitignore` 忽略，避免误提交 Key）
+3. 在 `tools/ufo2` 创建 `venv` 并 `pip install -r requirements.txt`
+4. 把 API Key 写入本地 `tools/ufo2/config/ufo/agents.yaml`
 
 也可先设环境变量再安装：
 
@@ -67,10 +68,18 @@ pip install -r requirements.txt
 
 ### 3. 配置 API Key
 
+若尚无 `agents.yaml`：
+
+```powershell
+copy tools\ufo2\config\ufo\agents.yaml.template tools\ufo2\config\ufo\agents.yaml
+```
+
 编辑 `tools/ufo2/config/ufo/agents.yaml`，将所有 `YOUR_VOLC_ARK_API_KEY` 替换为真实 Key。  
 四个 agent（`HOST_AGENT` / `APP_AGENT` / `EVALUATION_AGENT` / `BACKUP_AGENT`）都需要有效 Key。
 
 获取 Key：[火山引擎方舟控制台](https://console.volcengine.com/ark/)
+
+微信输入依赖 `tools/ufo2/scripts/set_clipboard.py`（仓库已自带，无需额外安装；需 venv 中已装 `pywin32`）。
 
 ### 4. 环境变量
 

@@ -32,6 +32,8 @@ vectordb/demonstration/*
 # Ignore the data files and scripts
 tasks/*
 scripts/*
+# 保留 pc-assistant 微信剪贴板脚本（非密钥、需入库）
+!scripts/set_clipboard.py
 backup/*
 node_modules/*
 

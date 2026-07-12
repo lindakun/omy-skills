@@ -1,92 +1,108 @@
 # omy-skills
 
-可复用的 **WorkBuddy / Agent 技能集**：把自然语言变成手机或 Windows 桌面上的自动化操作。
+可复用的 **Agent 技能集**（Claude Code / Codex / WorkBuddy / OpenCode 等）：把自然语言变成 **Android 手机** 或 **Windows 桌面** 上的自动化操作。
 
-> 设计目标：`git clone` 后按安装指南配置 API Key，即可在任意 Windows 机器上使用，**不依赖作者本机路径**。
+> 设计目标：`git clone` 后按平台安装指南配置 API Key 即可用，**不依赖作者本机路径**；密钥不入库。
 
 ## 技能一览
 
-| 技能 | 说明 | 平台 | 本仓库自带运行时 |
-|------|------|------|------------------|
-| [mobile-assistant](skills/mobile-assistant/) | 自然语言 → Android 手机自动化 | Windows 主机 + Android 手机 | 配置模板（引擎用 [mobilerun](https://github.com/droidrun/mobilerun)） |
-| [pc-assistant](skills/pc-assistant/) | 自然语言 → Windows 桌面 UI 自动化 | Windows 10/11 | 魔改版 [UFO²](https://github.com/microsoft/UFO)（`tools/ufo2`） |
+| 技能 | 说明 | 主机平台 | 本仓库自带 |
+|------|------|----------|------------|
+| [mobile-assistant](skills/mobile-assistant/) | 自然语言 → Android 自动化 | **macOS / Windows / Linux** | 配置模板（引擎 [mobilerun](https://github.com/droidrun/mobilerun)） |
+| [pc-assistant](skills/pc-assistant/) | 自然语言 → Windows 桌面 UI | **仅 Windows 10/11** | 魔改 [UFO²](https://github.com/microsoft/UFO)（`tools/ufo2`） |
+
+更完整的目录说明见 [SKILLS.md](SKILLS.md)。
 
 ## 5 分钟快速开始
 
-> ⚠️ **首次运行 PowerShell 脚本？** 如果遇到执行策略报错，先运行：
-> ```powershell
-> Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-> ```
-
 ### 0. 克隆仓库
+
+```bash
+git clone https://github.com/lindakun/omy-skills.git
+cd omy-skills
+export OMY_SKILLS_ROOT="$(pwd)"
+```
 
 ```powershell
 git clone https://github.com/lindakun/omy-skills.git
 cd omy-skills
-```
-
-建议设置环境变量（技能与安装脚本都会用到）：
-
-```powershell
-# 当前会话
 $env:OMY_SKILLS_ROOT = (Resolve-Path .).Path
-
-# 可选：写入用户环境变量（永久）
-[System.Environment]::SetEnvironmentVariable("OMY_SKILLS_ROOT", $env:OMY_SKILLS_ROOT, "User")
 ```
 
-### 1. 安装 PC 桌面技能（pc-assistant）
+### 1. 手机技能（mobile-assistant，推荐跨平台）
+
+需要：ADB、已 USB 调试的 Android、`mobilerun`、多模态 LLM API（默认火山 Doubao）。
+
+**macOS / Linux：**
+
+```bash
+chmod +x scripts/install-mobile.sh scripts/link-skills.sh
+# 可选：brew install --cask android-platform-tools
+# 可选：uv tool install mobilerun
+./scripts/install-mobile.sh --api-key "你的火山引擎API_Key" --device-serial "adb序列号"
+export MOBILERUN_CONFIG="$OMY_SKILLS_ROOT/tools/mobilerun/config.local.yaml"
+```
+
+**Windows：**
 
 ```powershell
-# 需要 Python 3.11 + 火山引擎 API Key
+# 若执行策略报错：Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\scripts\install-mobile.ps1 -ApiKey "你的火山引擎API_Key" -DeviceSerial "adb序列号"
+```
+
+详见 [skills/mobile-assistant/INSTALL.md](skills/mobile-assistant/INSTALL.md)。
+
+### 2. PC 桌面技能（pc-assistant，仅 Windows）
+
+```powershell
 .\scripts\install-pc.ps1 -ApiKey "你的火山引擎API_Key"
 ```
 
 详见 [skills/pc-assistant/INSTALL.md](skills/pc-assistant/INSTALL.md)。
 
-### 2. 安装手机技能（mobile-assistant）
+### 3. 接入 Agent
 
-```powershell
-# 需要 Python 3.11~3.13、ADB、已开启 USB 调试的 Android 手机
-.\scripts\install-mobile.ps1 -ApiKey "你的火山引擎API_Key"
+```bash
+./scripts/link-skills.sh          # macOS / Linux：链到已存在的 ~/.claude/skills 等
 ```
 
-详见 [skills/mobile-assistant/INSTALL.md](skills/mobile-assistant/INSTALL.md)。
+```powershell
+.\scripts\link-skills.ps1
+```
 
-### 3. 接入 Agent 技能
-
-将 `skills/pc-assistant`、`skills/mobile-assistant` 注册/复制到你的 Agent 技能目录（WorkBuddy、Claude Code skills 等），保证 Agent 能读到对应 `SKILL.md`。
-
-技能运行时会按 `OMY_SKILLS_ROOT`（或自动探测含 `tools/ufo2` 的仓库根）解析路径，无需改源码。
+或将 `skills/*` 手动复制/软链到各工具的 skills 目录。  
+运行时靠 `OMY_SKILLS_ROOT`（及 mobile 的 `MOBILERUN_CONFIG`）解析路径。
 
 ## 目录结构
 
 ```
 omy-skills/
 ├── README.md
+├── SKILLS.md                 # 技能目录与平台矩阵
 ├── .gitignore
 ├── scripts/
-│   ├── install-pc.ps1        # PC 技能一键安装（venv + API Key）
-│   └── install-mobile.ps1    # 手机技能配置生成 + 环境变量
+│   ├── install-mobile.sh     # mobile：生成 config.local.yaml（macOS/Linux）
+│   ├── install-mobile.ps1    # mobile：同上（Windows）
+│   ├── install-pc.ps1        # pc：venv + agents.yaml（Windows）
+│   ├── link-skills.sh        # 软链 skills 到常见 Agent 目录
+│   └── link-skills.ps1
 ├── skills/
 │   ├── mobile-assistant/
-│   │   ├── SKILL.md          # 手机自动化技能定义（Agent 入口）
-│   │   └── INSTALL.md        # ADB/mobilerun/手机调试 安装指南
+│   │   ├── SKILL.md
+│   │   └── INSTALL.md
 │   └── pc-assistant/
-│       ├── SKILL.md          # PC 桌面自动化技能定义（Agent 入口）
-│       └── INSTALL.md        # UFO² venv/火山 API 安装指南
+│       ├── SKILL.md
+│       └── INSTALL.md
 └── tools/
-    ├── ufo2/                 # 魔改 UFO²（pc-assistant 运行时，44K+ 行 Python）
-    │   ├── MODIFICATIONS.md  # 魔改清单（性能/微信/火山引擎）
-    │   ├── config/ufo/
-    │   │   ├── agents.yaml   # 四 Agent 配置模板（火山 Doubao）
-    │   │   ├── system.yaml   # 系统参数优化配置
-    │   │   └── mcp.yaml      # MCP 集成配置
-    │   ├── scripts/
-    │   │   └── set_clipboard.py  # 剪贴板脚本（微信专用）
-    │   └── ufo/              # UFO² 核心源码
-    └── mobilerun/
-        └── config_multi_windows.yaml  # mobilerun 多模型/多设备配置模板
+    ├── mobilerun/
+    │   ├── config.template.yaml       # 主机无关 Android 配置模板
+    │   ├── config_multi_windows.yaml  # 旧名，兼容保留
+    │   └── config.local.yaml          # 本地生成（gitignore）
+    └── ufo2/                          # pc-assistant 运行时
+        ├── MODIFICATIONS.md
+        ├── config/ufo/
+        ├── scripts/set_clipboard.py
+        └── ufo/
 ```
 
 ## 路径与环境变量约定
@@ -94,20 +110,22 @@ omy-skills/
 | 变量 | 用途 | 是否必须 |
 |------|------|----------|
 | `OMY_SKILLS_ROOT` | 本仓库根目录绝对路径 | 强烈建议 |
-| `VOLC_ARK_API_KEY` | 火山引擎方舟 API Key（安装脚本可写入配置） | 使用默认模型时必须 |
-| `UFO_ROOT` | 覆盖 UFO² 源码目录（默认 `$OMY_SKILLS_ROOT/tools/ufo2`） | 可选 |
-| `UFO_PYTHON` | 覆盖 Python 解释器（默认 `$UFO_ROOT/venv/Scripts/python.exe`） | 可选 |
-| `MOBILERUN_HOME` | mobilerun 源码/安装目录 | mobile 技能建议设置 |
-| `MOBILERUN_CONFIG` | mobilerun 使用的 yaml 配置文件路径 | 可选 |
+| `VOLC_ARK_API_KEY` | 火山引擎方舟 API Key | 使用默认火山模型时需要 |
+| `MOBILERUN_CONFIG` | mobile 使用的 yaml（推荐指向仓库 `config.local.yaml`） | mobile 推荐 |
+| `UFO_ROOT` | 覆盖 UFO² 目录（默认 `$OMY_SKILLS_ROOT/tools/ufo2`） | 可选 |
+| `UFO_PYTHON` | 覆盖 Python（默认 Windows venv 路径） | 可选 |
+| `MOBILERUN_HOME` | mobilerun 源码目录（若用源码安装） | 可选 |
+
+**mobile 配置策略：** 优先 `MOBILERUN_CONFIG` → 仓库内 `config.local.yaml` → 否则使用 mobilerun 默认用户配置（`mobilerun configure`）。安装脚本**不会**改写 Application Support / AppData 中的默认配置。
 
 ## 安全说明
 
 - 仓库内 API Key **仅为占位符**（`YOUR_VOLC_ARK_API_KEY` 等）。
-- 安装脚本会在**本地配置文件**中写入你提供的 Key；请勿把含真实 Key 的文件 `git commit`。
-- 已在 `.gitignore` 中忽略 `venv/`、`.env`、`*.local.yaml` 等。
+- 安装脚本写入**本地** `*.local.yaml` / `agents.yaml`；请勿把含真实 Key 的文件 `git commit`。
+- `.gitignore` 已忽略 `venv/`、`.env`、`*.local.yaml` 等。
 
 ## 平台要求
 
-- **pc-assistant**：Windows 10/11（UFO² 依赖 UIA）
-- **mobile-assistant**：Windows 主机 + USB 调试 Android 设备
-- 两个技能都需要可访问多模态 LLM API（默认火山引擎 Doubao）
+- **mobile-assistant**：macOS / Windows / Linux 主机 + USB 调试 Android
+- **pc-assistant**：Windows 10/11（UFO² 依赖 UI Automation）
+- LLM：可访问的多模态 API（默认火山引擎 Doubao）
