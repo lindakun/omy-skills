@@ -104,7 +104,11 @@ def _ask_vision(
                     {"type": "text", "text": prompt},
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/{mime};base64,{b64}"},
+                        "image_url": {
+                            "url": f"data:image/{mime};base64,{b64}",
+                            # low：显著降低火山视觉超时概率（gate 只需判标题/行号）
+                            "detail": "low",
+                        },
                     },
                 ],
             },
@@ -127,34 +131,42 @@ def gate1_search_contact(
 
     返回：
       matched: bool
-      row: int  # 1-based，从结果列表顶部往下数
+      row: int  # 1-based，仅计搜索结果里可键盘选中的项
       title: str
       confidence: float 0-1
       reason: str
     """
-    prompt = f"""当前是 macOS 微信界面截图，用户刚搜索联系人/会话。
+    prompt = f"""当前是 macOS 微信【刚搜索后】的界面截图。
 目标名称：「{contact}」
 
-请判断搜索结果/会话列表中是否出现可匹配的目标（允许简称，如「文件传输助手」）。
-若匹配，给出从上往下第几项（第一项 row=1，仅计可见结果行，不含搜索框本身）。
+任务：判断搜索结果里是否出现可匹配目标（允许简称，如「文件传输助手」）。
+
+计数规则（很重要，直接影响键盘 Down 次数）：
+1. 只数搜索框下方、被过滤后的【可点选结果行】；不要数未过滤的主会话列表。
+2. 不要把分组标题算作一行：如「联系人」「群聊」「聊天记录」「公众号」「更多」等分类标题。
+3. 不要把搜索框本身算作一行。
+4. 「公众号」若是聚合入口/分类标题，且目标不是「公众号」，绝不要选它。
+5. row=1 表示键盘导航时的【第一个】可点选匹配结果（微信通常把最相关结果排第一）。
+6. 若目标名与某结果几乎完全一致，优先报该项真实 row；若只有一个明显匹配，通常 row=1。
 
 只输出 JSON：
 {{
   "matched": true/false,
   "row": 1,
-  "title": "你看到的名称",
+  "title": "你看到的结果名称",
   "confidence": 0.0到1.0,
   "reason": "一句话"
 }}
 若完全看不到微信或搜索 UI，matched=false。
 """
     try:
-        data = _ask_vision(prompt, log=log)
+        # 默认就用较小图；大图在火山侧更容易 60–90s 超时
+        data = _ask_vision(prompt, log=log, max_side=640, quality=35)
     except Exception as e:
-        # 一次缩小图重试
+        # 一次更小图重试
         if log:
             log(f"gate1: vision error {e}, retry smaller")
-        data = _ask_vision(prompt, log=log, max_side=720, quality=40)
+        data = _ask_vision(prompt, log=log, max_side=512, quality=30)
     matched = bool(data.get("matched"))
     try:
         row = int(data.get("row") or 0)
@@ -174,6 +186,63 @@ def gate1_search_contact(
         "confidence": conf,
         "reason": str(data.get("reason") or ""),
         "gate": "gate1_search",
+    }
+
+
+def gate_in_session(
+    session: str,
+    log: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """进入会话后的轻量验收：是否已在目标聊天（非公众号聚合页/其它会话）。"""
+    prompt = f"""微信窗口截图。请判断是否已进入目标会话「{session}」的聊天界面。
+
+判定要点：
+1. 看聊天区顶部/标题栏会话名是否匹配目标（允许简称/群名包含关系）。
+2. 若是「公众号」聚合页、搜索结果页、通讯录、或其它会话名，则 in_session=false。
+3. 正常私聊/群聊主界面（有消息区或输入框）且标题匹配 → in_session=true。
+
+只输出 JSON：
+{{
+  "in_session": true/false,
+  "session_title": "你看到的标题",
+  "confidence": 0.0到1.0,
+  "reason": "一句话"
+}}
+"""
+    try:
+        data = _ask_vision(prompt, log=log, max_side=720, quality=40)
+    except Exception as e:
+        if log:
+            log(f"gate_in_session: vision error {e}, retry smaller")
+        data = _ask_vision(prompt, log=log, max_side=640, quality=35)
+    in_session = bool(data.get("in_session"))
+    conf = float(data.get("confidence") or 0.0)
+    title = str(data.get("session_title") or "")
+    # 标题明显是公众号聚合页 → 强制失败
+    bad_titles = ("公众号", "Official Accounts", "Subscriptions")
+    if in_session and any(b in title for b in bad_titles) and session not in bad_titles:
+        in_session = False
+        data["reason"] = f"opened aggregate page {title!r}: {data.get('reason')}"
+    if in_session and conf < 0.5:
+        in_session = False
+        data["reason"] = f"confidence too low ({conf}): {data.get('reason')}"
+    # 标题与目标完全无关时收紧（有标题才比）
+    if in_session and title and session:
+        t = title.strip().lower()
+        s = session.strip().lower()
+        if s not in t and t not in s and not any(
+            part and part in t for part in re.split(r"[\s\-_/|]+", s) if len(part) >= 2
+        ):
+            # 不立刻否决：群名展示可能截断；仅降置信度
+            if conf < 0.85:
+                in_session = False
+                data["reason"] = f"title {title!r} unlikely match {session!r}: {data.get('reason')}"
+    return {
+        "in_session": in_session,
+        "session_title": title,
+        "confidence": conf,
+        "reason": str(data.get("reason") or ""),
+        "gate": "gate_in_session",
     }
 
 
@@ -198,7 +267,7 @@ def gate2_send_verify(
 消息预览：「{preview}」
 
 请判断：
-1) 是否已进入与目标相关的聊天会话（标题/头像区域像该联系人或文件传输助手等）
+1) 是否已进入与目标相关的聊天会话（标题可含备注后缀如 -1688；允许简称/包含关系）
 2) 底部输入框是否大致为空（消息已发出），还是仍残留刚输入的正文
 3) 综合是否认为发送成功
 
@@ -260,7 +329,8 @@ def gate_read_messages(
     """
     n = max(1, min(int(last_n or 5), 30))
     prompt = (
-        f"微信聊天截图。目标会话「{session}」。"
+        f"微信聊天截图。目标会话「{session}」"
+        f"（标题也可能带备注后缀如 -1688，包含关系即算匹配）。"
         f"抽取最近最多{n}条可见消息。"
         f"只输出JSON："
         f'{{"in_session":true/false,"session_title":"...","messages":'

@@ -119,13 +119,19 @@ def _print_result(result: dict, log_path: str | None) -> int:
         else f"❌ FAIL: {result.get('reason') or result}"
     )
     print(line, flush=True)
-    if status == "success" and result.get("clipboard_text"):
-        # 读消息时额外打印内容便于 Agent 回复用户
-        print(result["clipboard_text"], flush=True)
+    if status == "success":
+        # 读消息截图路径；或兼容旧 clipboard 文本
+        shot = result.get("screenshot_path")
+        if shot:
+            print(f"SCREENSHOT: {shot}", flush=True)
+        elif result.get("clipboard_text"):
+            print(result["clipboard_text"], flush=True)
     if log_path:
         try:
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
+                if status == "success" and result.get("screenshot_path"):
+                    f.write(f"SCREENSHOT: {result['screenshot_path']}\n")
         except Exception:
             pass
     return 0 if status == "success" else 1
@@ -225,16 +231,32 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("-l", "--log", help="Append log file path")
     r.set_defaults(func=cmd_run)
 
-    w = sub.add_parser("wechat-send", help="WeChat send with vision gates")
-    w.add_argument("--contact", "-t", required=True, help="Contact / session name")
+    w = sub.add_parser(
+        "wechat-send",
+        help="WeChat send: remark-suffix + focus input + clipboard verify (no vision)",
+    )
+    w.add_argument("--contact", "-t", required=True, help="Contact / session oral name")
     w.add_argument("--message", "-m", required=True, help="Message text")
     w.add_argument("-l", "--log", help="Append log file path")
     w.set_defaults(func=cmd_wechat_send)
 
-    wr = sub.add_parser("wechat-read", help="WeChat read last N messages + clipboard")
-    wr.add_argument("--session", "-s", required=True, help="Chat / group name")
-    wr.add_argument("--last", "-n", type=int, default=5, help="How many recent messages")
-    wr.add_argument("--no-clipboard", action="store_true", help="Do not write clipboard")
+    wr = sub.add_parser(
+        "wechat-read",
+        help="Open WeChat session and save chat screenshot (no vision OCR)",
+    )
+    wr.add_argument("--session", "-s", required=True, help="Chat / group name (oral name)")
+    wr.add_argument(
+        "--last",
+        "-n",
+        type=int,
+        default=5,
+        help="Deprecated (screenshot mode; ignored)",
+    )
+    wr.add_argument(
+        "--no-clipboard",
+        action="store_true",
+        help="Do not put screenshot path text on clipboard",
+    )
     wr.add_argument("-l", "--log", help="Append log file path")
     wr.set_defaults(func=cmd_wechat_read)
 

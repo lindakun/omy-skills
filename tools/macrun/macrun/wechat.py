@@ -1,15 +1,24 @@
 # -*- coding: utf-8 -*-
-"""微信 Mac：脚本推进 + 关卡式视觉验收（Gate1 选人 / Gate2 发送）。"""
+"""微信 Mac：备注后缀脚本选人/发送；读消息只截图。默认全流程不调视觉。"""
 
 from __future__ import annotations
 
 import re
+import subprocess
 import time
+import uuid
+from pathlib import Path
 from typing import Any, Callable
 
-from macrun import act, ax
+from macrun import act, ax, vision
 from macrun.config import load_config
-from macrun.gate import gate1_search_contact, gate2_send_verify, gate_read_messages
+
+# 默认备注后缀；可用 config wechat.remark_suffix 覆盖
+DEFAULT_REMARK_SUFFIX = "-1688"
+DEFAULT_NO_SUFFIX_SESSIONS = ("文件传输助手",)
+DEFAULT_READ_SCREENSHOT = "/tmp/wechat_screenshot.jpg"
+# 剪贴板探测用标记（不应与正常聊天正文冲突）
+_PROBE_CANARY_PREFIX = "__macrun_probe__"
 
 
 def normalize_message(message: str) -> str:
@@ -95,6 +104,105 @@ def _wechat_cfg() -> dict[str, Any]:
         return {}
 
 
+def resolve_session_query(
+    raw: str,
+    wcfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """将用户口语名解析为微信搜索串。
+
+    规则：
+    - 默认在备注后拼 remark_suffix（默认 -1688）保证唯一
+    - no_suffix_sessions（默认含「文件传输助手」）不拼
+    - 已以后缀结尾则不双拼
+    - remark_suffix_enabled=false 或 suffix 为空则原样
+
+    返回：
+      display: 用户原始名
+      query: 实际搜索串
+      used_suffix: 是否本次拼接了后缀
+      exception: 是否命中免后缀白名单
+      suffix: 当前配置的后缀
+    """
+    cfg = wcfg if wcfg is not None else _wechat_cfg()
+    display = (raw or "").strip()
+    suffix = cfg.get("remark_suffix", DEFAULT_REMARK_SUFFIX)
+    if suffix is None:
+        suffix = DEFAULT_REMARK_SUFFIX
+    suffix = str(suffix)
+    enabled = bool(cfg.get("remark_suffix_enabled", True))
+
+    no_suffix = cfg.get("no_suffix_sessions")
+    if no_suffix is None:
+        no_list = list(DEFAULT_NO_SUFFIX_SESSIONS)
+    elif isinstance(no_suffix, str):
+        no_list = [no_suffix]
+    else:
+        no_list = [str(x).strip() for x in no_suffix if str(x).strip()]
+
+    if not display:
+        return {
+            "display": "",
+            "query": "",
+            "used_suffix": False,
+            "exception": False,
+            "suffix": suffix,
+        }
+
+    # 白名单：精确匹配（忽略首尾空白）
+    for name in no_list:
+        if display == name:
+            return {
+                "display": display,
+                "query": display,
+                "used_suffix": False,
+                "exception": True,
+                "suffix": suffix,
+            }
+
+    if not enabled or not suffix:
+        return {
+            "display": display,
+            "query": display,
+            "used_suffix": False,
+            "exception": False,
+            "suffix": suffix,
+        }
+
+    if display.endswith(suffix):
+        return {
+            "display": display,
+            "query": display,
+            "used_suffix": False,
+            "exception": False,
+            "suffix": suffix,
+        }
+
+    return {
+        "display": display,
+        "query": f"{display}{suffix}",
+        "used_suffix": True,
+        "exception": False,
+        "suffix": suffix,
+    }
+
+
+def _gates_flags(wcfg: dict[str, Any]) -> dict[str, bool]:
+    """视觉关卡开关。默认全关（备注后缀 + 纯脚本）。
+
+    仅当显式 gates.send: true 时开启发送后视觉校验（调试用）。
+    """
+    gates = wcfg.get("gates")
+    if isinstance(gates, dict):
+        return {
+            "search": bool(gates.get("search", False)),
+            "enter": bool(gates.get("enter", False)),
+            "send": bool(gates.get("send", False)),
+            "read": bool(gates.get("read", False)),
+        }
+    # 旧 gates_enabled 不再默认打开任何视觉；需显式 gates.send
+    return {"search": False, "enter": False, "send": False, "read": False}
+
+
 def _ts() -> float:
     return time.perf_counter()
 
@@ -139,13 +247,209 @@ def _critical_paste(
         act.ensure_front("WeChat", settle=0.12)
 
 
-def _select_row(row: int, log: Callable[[str], None], t0: float) -> None:
-    """row 为 1-based：按 (row-1) 次 Down 再 Enter。禁止盲点。"""
-    n = max(0, int(row) - 1)
-    for i in range(n):
-        _critical_hotkey("down", log=log, t0=t0, label=f"select-down-{i+1}")
+def _clipboard_get() -> str:
+    r = subprocess.run(["pbpaste"], capture_output=True, check=False)
+    if r.returncode != 0:
+        return ""
+    return (r.stdout or b"").decode("utf-8", errors="replace")
+
+
+def _clipboard_set(text: str) -> None:
+    subprocess.run(["pbcopy"], input=(text or "").encode("utf-8"), check=False)
+
+
+def _norm_probe_text(text: str) -> str:
+    """探测比对用：统一换行与首尾空白。"""
+    return (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _wechat_window_bounds() -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """返回微信主窗口 (position, size)；失败返回 None。"""
+    found = ax.find_app(name="WeChat")
+    if not found or not found.get("pid"):
+        return None
+    try:
+        nodes = ax.dump_tree(pid=int(found["pid"]), max_nodes=20, max_depth=3)
+    except Exception:
+        return None
+    for n in nodes:
+        if "window" not in str(n.get("role") or "").lower():
+            continue
+        pos, size = n.get("position"), n.get("size")
+        if pos and size and size[0] > 200 and size[1] > 200:
+            return (float(pos[0]), float(pos[1])), (float(size[0]), float(size[1]))
+    return None
+
+
+def _focus_chat_input(
+    log: Callable[[str], None],
+    t0: float,
+    wcfg: dict[str, Any],
+    *,
+    attempt: int = 1,
+) -> dict[str, Any]:
+    """选人后把焦点落到底部输入框。
+
+    微信 Mac AX 树几乎无控件，无法靠 Accessibility 找输入框。
+    策略：Esc 收起搜索 → 按主窗口几何点击聊天区底部输入带。
+    attempt>1 时微调点击坐标（几乎不增加成功路径耗时）。
+    """
+    x_ratio = float(wcfg.get("input_click_x_ratio") or 0.58)
+    bottom_inset = float(wcfg.get("input_click_bottom_inset") or 70)
+    # 重试：略上移/右移，避开工具栏或点偏
+    nudge_y = 0.0
+    nudge_x = 0.0
+    if attempt >= 2:
+        nudge_y = -18.0
+        nudge_x = 24.0
+    if attempt >= 3:
+        nudge_y = -36.0
+        nudge_x = -20.0
+
+    act.ensure_front("WeChat", settle=0.10)
+    # 关闭仍停留在搜索框的焦点
+    _critical_hotkey("escape", log=log, t0=t0, label="focus-esc")
+    time.sleep(0.08)
+
+    bounds = _wechat_window_bounds()
+    if not bounds:
+        _log_step(log, t0, "focus input: no window bounds, skip click")
+        return {"ok": False, "reason": "no_window_bounds"}
+
+    (px, py), (sw, sh) = bounds
+    x = px + sw * x_ratio + nudge_x
+    y = py + sh - bottom_inset + nudge_y
+    _log_step(
+        log,
+        t0,
+        f"focus input: click ({x:.0f},{y:.0f}) attempt={attempt} "
+        f"win=({px:.0f},{py:.0f},{sw:.0f}x{sh:.0f})",
+    )
+    act.ensure_front("WeChat", settle=0.06)
+    ax.click_xy(x, y)
+    time.sleep(0.10)
+    if not _is_wechat_front():
+        act.ensure_front("WeChat", settle=0.10)
+        ax.click_xy(x, y)
+        time.sleep(0.08)
+    return {"ok": True, "x": x, "y": y, "bounds": bounds, "attempt": attempt}
+
+
+def _clear_chat_input(log: Callable[[str], None], t0: float) -> None:
+    """清空当前焦点处文本（假定已在输入框）。"""
+    _critical_hotkey("cmd", "a", log=log, t0=t0, label="clear-select")
+    time.sleep(0.04)
+    _critical_hotkey("delete", log=log, t0=t0, label="clear-delete")
+    time.sleep(0.05)
+
+
+def _collapse_input_selection(
+    log: Callable[[str], None] | None,
+    t0: float,
+) -> None:
+    """取消输入框内全选，把光标收到文末。
+
+    粘贴校验会 Cmd+A；若保持全选再按 Return，微信常把选中正文直接删掉
+    （输入框变空但消息未发出），导致假成功。
+    Right 取消选区；Cmd+Down 跳到文末（多行更稳，几乎不耗时）。
+    """
+    act.ensure_front("WeChat", settle=0.04)
+    act.hotkey("right", app_name="WeChat", ensure=False, settle=0.02)
+    time.sleep(0.02)
+    act.hotkey("cmd", "down", app_name="WeChat", ensure=False, settle=0.02)
+    time.sleep(0.03)
+    if log:
+        _log_step(log, t0, "collapse selection (right+cmd+down)")
+
+
+def _snapshot_on_fail(
+    log: Callable[[str], None],
+    t0: float,
+    wcfg: dict[str, Any],
+    tag: str,
+) -> str | None:
+    """仅失败时截一张微信窗口图，便于排障（成功路径零开销）。"""
+    if not bool(wcfg.get("fail_screenshot", True)):
+        return None
+    path = str(wcfg.get("fail_screenshot_path") or "/tmp/wechat_send_fail.jpg")
+    try:
+        act.ensure_front("WeChat", settle=0.06)
+        saved = vision.capture_front_window_to(
+            path,
+            owner_names=["WeChat", "微信", "xinWeChat"],
+            compress=True,
+            max_side=int(wcfg.get("fail_screenshot_max_side") or 1280),
+            quality=int(wcfg.get("fail_screenshot_jpeg_quality") or 70),
+        )
+        _log_step(log, t0, f"fail snapshot [{tag}]: {saved}")
+        return str(saved)
+    except Exception as e:
+        _log_step(log, t0, f"fail snapshot skip: {e}")
+        return None
+
+
+def _probe_input_text(
+    log: Callable[[str], None],
+    t0: float,
+    *,
+    collapse_after: bool = False,
+) -> str:
+    """用 Cmd+A / Cmd+C 探测当前焦点文本（不依赖 AX Value）。
+
+    先写入 canary 再复制：若焦点处无选中内容，剪贴板仍为 canary。
+    collapse_after=True 时取消全选，避免紧接着发送时把正文删掉。
+    """
+    canary = f"{_PROBE_CANARY_PREFIX}{uuid.uuid4().hex[:10]}"
+    act.ensure_front("WeChat", settle=0.08)
+    _clipboard_set(canary)
+    time.sleep(0.04)
+    act.hotkey("cmd", "a", app_name="WeChat", ensure=False, settle=0.03)
+    time.sleep(0.04)
+    act.hotkey("cmd", "c", app_name="WeChat", ensure=False, settle=0.03)
+    time.sleep(0.08)
+    got = _clipboard_get()
+    if got == canary:
+        _log_step(log, t0, "probe input: empty (canary unchanged)")
+        return ""
+    preview = got.replace("\n", "\\n")
+    if len(preview) > 60:
+        preview = preview[:60] + "…"
+    _log_step(log, t0, f"probe input: {len(got)} chars preview={preview!r}")
+    if collapse_after and got:
+        _collapse_input_selection(log, t0)
+    return got
+
+
+def _input_matches_message(probed: str, message: str) -> bool:
+    """粘贴后：探测文本应与正文一致（允许首尾空白/换行差异）。"""
+    a, b = _norm_probe_text(probed), _norm_probe_text(message)
+    if not b:
+        return False
+    if a == b:
+        return True
+    # 个别版本粘贴后末尾多一个换行已在 strip 处理；再容忍全等失败时的包含
+    return a.replace("\n", "") == b.replace("\n", "")
+
+
+def _input_still_has_message(probed: str, message: str) -> bool:
+    """发送后：若输入框仍基本等于正文，视为未发出。"""
+    return _input_matches_message(probed, message)
+
+
+def _select_first_result(
+    select_mode: str,
+    log: Callable[[str], None],
+    t0: float,
+) -> None:
+    """备注后缀搜索后固定选第 1 条。默认 enter（更快）。"""
+    mode = (select_mode or "enter").lower().strip()
+    if mode in ("down_enter", "down+enter", "down"):
+        _critical_hotkey("down", log=log, t0=t0, label="select-down")
         time.sleep(0.06)
-    _critical_hotkey("return", log=log, t0=t0, label="select-enter")
+        _critical_hotkey("return", log=log, t0=t0, label="select-enter")
+    else:
+        # enter：焦点在搜索框时微信通常直接打开第一条最佳匹配
+        _critical_hotkey("return", log=log, t0=t0, label="select-enter")
 
 
 def open_session(
@@ -154,21 +458,39 @@ def open_session(
     t0: float,
     wcfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """打开/激活微信并搜索进入会话。成功返回 {status:ok, gate1}，失败 status:fail。"""
+    """打开微信并用备注后缀搜索进入会话（无视觉选人）。
+
+    成功：{status:ok, display, query, ...}
+    失败：status:fail（如微信未运行）。未设备注时可能进错会话，由用户侧备注约定保证。
+    """
     wcfg = wcfg if wcfg is not None else _wechat_cfg()
     session = (session or "").strip()
     if not session:
         return {"status": "fail", "reason": "session name empty"}
 
-    gates_enabled = bool(wcfg.get("gates_enabled", True))
+    resolved = resolve_session_query(session, wcfg)
+    display = resolved["display"]
+    query = resolved["query"]
+    if not query:
+        return {"status": "fail", "reason": "session name empty"}
+
     search_keys = wcfg.get("search_hotkey") or ["cmd", "f"]
     if isinstance(search_keys, str):
         search_keys = search_keys.replace("+", " ").split()
     search_keys = [str(k) for k in search_keys]
     open_sleep = float(wcfg.get("open_sleep") or 0.35)
     search_sleep = float(wcfg.get("search_sleep") or 0.35)
-    after_contact_sleep = float(wcfg.get("after_contact_sleep") or 0.35)
+    after_contact_sleep = float(wcfg.get("after_contact_sleep") or 0.40)
     after_select_sleep = float(wcfg.get("after_select_sleep") or 0.45)
+    select_mode = str(wcfg.get("select_mode") or "enter").lower().strip()
+
+    _log_step(
+        log,
+        t0,
+        f"resolve display={display!r} query={query!r} "
+        f"used_suffix={resolved.get('used_suffix')} "
+        f"exception={resolved.get('exception')} suffix={resolved.get('suffix')!r}",
+    )
 
     found = ax.find_app(name="WeChat")
     if found:
@@ -197,48 +519,26 @@ def open_session(
     _critical_hotkey(*search_keys, log=log, t0=t0, label="search")
     time.sleep(search_sleep)
 
-    _log_step(log, t0, f"paste session {session!r}")
-    _critical_paste(session, log=log, t0=t0, label="session")
+    # 清空搜索框再粘贴，避免残留关键字
+    _critical_hotkey("cmd", "a", log=log, t0=t0, label="select-all")
+    time.sleep(0.04)
+    _log_step(log, t0, f"paste query {query!r}")
+    _critical_paste(query, log=log, t0=t0, label="session")
     time.sleep(after_contact_sleep)
 
-    row = 1
-    gate1: dict[str, Any] | None = None
-    if gates_enabled:
-        _log_step(log, t0, "gate1: vision check search results")
-        try:
-            gate1 = gate1_search_contact(session, log=log)
-        except Exception as e:
-            _log_step(log, t0, f"gate1 error: {e}")
-            return {
-                "status": "fail",
-                "reason": f"Gate1 视觉验收失败（API/截图）：{e}",
-                "gate1": {"error": str(e)},
-            }
-        _log_step(
-            log,
-            t0,
-            f"gate1 result matched={gate1.get('matched')} row={gate1.get('row')} "
-            f"title={gate1.get('title')!r} conf={gate1.get('confidence')} "
-            f"reason={gate1.get('reason')}",
-        )
-        if not gate1.get("matched"):
-            return {
-                "status": "fail",
-                "reason": (
-                    f"Gate1 未在搜索结果中确认「{session}」"
-                    f"（{gate1.get('reason') or 'no match'}）。"
-                    f"已中止，避免机械进入错误会话。"
-                ),
-                "gate1": gate1,
-            }
-        row = int(gate1.get("row") or 1)
-    else:
-        _log_step(log, t0, "gate1 skipped, use row=1")
-
-    _log_step(log, t0, f"select row={row}")
-    _select_row(row, log=log, t0=t0)
+    _log_step(log, t0, f"select first result mode={select_mode} (no vision)")
+    _select_first_result(select_mode, log=log, t0=t0)
     time.sleep(after_select_sleep)
-    return {"status": "ok", "gate1": gate1, "row": row, "session": session}
+
+    return {
+        "status": "ok",
+        "display": display,
+        "query": query,
+        "session": display,
+        "resolved": resolved,
+        "select_mode": select_mode,
+        "mode": "remark-suffix",
+    }
 
 
 def send_message(
@@ -247,7 +547,11 @@ def send_message(
     log: Callable[[str], None] | None = None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """脚本推进 + Gate1/Gate2 视觉验收；Gate 失败直接 FAIL（不盲 Enter）。"""
+    """备注后缀脚本选人并发送。
+
+    默认：Esc+点击聚焦输入框，剪贴板探测校验粘贴/发送是否成功（不调视觉）。
+    gates.send=true 时额外做视觉 Gate2。
+    """
 
     def _log(msg: str) -> None:
         if log:
@@ -262,128 +566,198 @@ def send_message(
         return {"status": "fail", "reason": "contact/message empty"}
 
     wcfg = config if config is not None else _wechat_cfg()
-    send_mode = str(wcfg.get("send_mode") or "both").lower().strip()
+    # 默认 enter：对应本机常见「Enter 发送」；both 仅作兼容
+    send_mode = str(wcfg.get("send_mode") or "enter").lower().strip()
     if send_mode not in ("both", "enter", "cmd_enter", "cmd+enter", "return"):
-        send_mode = "both"
+        send_mode = "enter"
     if send_mode == "cmd+enter":
         send_mode = "cmd_enter"
     if send_mode == "return":
         send_mode = "enter"
 
-    gates_enabled = bool(wcfg.get("gates_enabled", True))
-    after_message_sleep = float(wcfg.get("after_message_sleep") or 0.25)
+    gflags = _gates_flags(wcfg)
+    after_message_sleep = float(wcfg.get("after_message_sleep") or 0.22)
+    # 默认开启：聚焦输入框 + 剪贴板探测（修「假 SUCCESS」）
+    focus_input = bool(wcfg.get("focus_input", True))
+    verify_send = bool(wcfg.get("verify_send", True))
 
     _log(
         f"wechat-script start contact={contact!r} message_len={len(message)} "
-        f"send_mode={send_mode} gates={gates_enabled}"
+        f"send_mode={send_mode} focus_input={focus_input} "
+        f"verify_send={verify_send} vision={'on' if gflags['send'] else 'off'}"
     )
 
     opened = open_session(contact, _log, t0, wcfg)
     if opened.get("status") != "ok":
         opened["elapsed_s"] = round(time.perf_counter() - t0, 2)
+        snap = _snapshot_on_fail(_log, t0, wcfg, "open_session")
+        if snap:
+            opened["fail_screenshot"] = snap
         return opened
-    gate1 = opened.get("gate1")
+    display = str(opened.get("display") or contact)
+    query = str(opened.get("query") or contact)
 
-    # 正文 + 发送
-    _log_step(_log, t0, f"paste message ({len(message)} chars)")
-    _critical_paste(message, log=_log, t0=t0, label="message")
-    time.sleep(after_message_sleep)
-
-    _log_step(_log, t0, f"send mode={send_mode}")
-    act.ensure_front("WeChat", settle=0.12)
-    send_result = act.send_chat(app_name="WeChat", mode=send_mode, ensure=False)
-    if not _is_wechat_front():
-        _log_step(_log, t0, "send: focus lost, resend once")
-        act.ensure_front("WeChat", settle=0.15)
-        send_result = act.send_chat(app_name="WeChat", mode=send_mode, ensure=False)
-    _log_step(_log, t0, str(send_result))
-    time.sleep(0.35)
-
-    gate2: dict[str, Any] | None = None
-    if gates_enabled:
-        _log_step(_log, t0, "gate2: vision verify send")
-        try:
-            gate2 = gate2_send_verify(contact, message, log=_log)
-        except Exception as e:
-            _log_step(_log, t0, f"gate2 error: {e}")
-            return {
-                "status": "fail",
-                "reason": f"Gate2 视觉验收失败（API/截图）：{e}",
-                "gate1": gate1,
-                "gate2": {"error": str(e)},
-                "elapsed_s": round(time.perf_counter() - t0, 2),
-            }
+    def _paste_with_focus(attempt: int) -> bool:
+        if focus_input:
+            _log_step(_log, t0, f"focus chat input (attempt {attempt})")
+            _focus_chat_input(_log, t0, wcfg, attempt=attempt)
+            _clear_chat_input(_log, t0)
+        _log_step(_log, t0, f"paste message ({len(message)} chars, attempt {attempt})")
+        _critical_paste(message, log=_log, t0=t0, label="message")
+        time.sleep(after_message_sleep)
+        if not verify_send:
+            _collapse_input_selection(_log, t0)
+            return True
+        # collapse_after：必须在发送前取消全选，否则 Return 会删掉正文
+        probed = _probe_input_text(_log, t0, collapse_after=True)
+        ok = _input_matches_message(probed, message)
         _log_step(
             _log,
             t0,
-            f"gate2 result sent={gate2.get('sent')} in_chat={gate2.get('in_chat')} "
-            f"empty={gate2.get('input_emptyish')} conf={gate2.get('confidence')} "
-            f"reason={gate2.get('reason')}",
+            f"paste verify: {'ok' if ok else 'FAIL'} "
+            f"probed_len={len(probed)} expect_len={len(message)}",
         )
+        return ok
 
-        if not gate2.get("sent"):
-            alt = "enter" if send_mode != "enter" else "cmd_enter"
-            _log_step(_log, t0, f"gate2 fail → retry send mode={alt}")
+    # 粘贴 + 校验（失败则换坐标再试一次）
+    paste_ok = _paste_with_focus(1)
+    if not paste_ok:
+        _log_step(_log, t0, "paste verify failed, retry with click nudge")
+        paste_ok = _paste_with_focus(2)
+    if verify_send and not paste_ok:
+        try:
+            if focus_input:
+                _focus_chat_input(_log, t0, wcfg, attempt=3)
+            _clear_chat_input(_log, t0)
+        except Exception:
+            pass
+        snap = _snapshot_on_fail(_log, t0, wcfg, "paste_verify")
+        out = {
+            "status": "fail",
+            "reason": (
+                f"粘贴校验失败：正文未进入「{display}」输入框"
+                f"（搜索「{query}」）。可能焦点仍在搜索框。"
+            ),
+            "display": display,
+            "query": query,
+            "elapsed_s": round(time.perf_counter() - t0, 2),
+        }
+        if snap:
+            out["fail_screenshot"] = snap
+        return out
+
+    def _do_send(attempt: int, *, collapse: bool = True) -> str:
+        # 粘贴校验已 collapse；首次发送可跳过二次 collapse 省约 50ms
+        if collapse:
+            _collapse_input_selection(_log, t0)
+        _log_step(_log, t0, f"send mode={send_mode} (attempt {attempt})")
+        act.ensure_front("WeChat", settle=0.08)
+        send_result = act.send_chat(app_name="WeChat", mode=send_mode, ensure=False)
+        if not _is_wechat_front():
+            _log_step(_log, t0, "send: focus lost, resend key once")
             act.ensure_front("WeChat", settle=0.12)
-            act.send_chat(app_name="WeChat", mode=alt, ensure=False)
-            time.sleep(0.4)
-            try:
-                gate2 = gate2_send_verify(contact, message, log=_log)
-            except Exception as e:
-                return {
-                    "status": "fail",
-                    "reason": f"Gate2 重试时视觉失败：{e}",
-                    "gate1": gate1,
-                    "gate2": {"error": str(e)},
-                    "elapsed_s": round(time.perf_counter() - t0, 2),
-                }
+            send_result = act.send_chat(app_name="WeChat", mode=send_mode, ensure=False)
+        _log_step(_log, t0, str(send_result))
+        time.sleep(0.28)
+        return str(send_result)
+
+    # 粘贴探测刚 collapse 过，首次发送不再重复
+    _do_send(1, collapse=False)
+
+    send_verified = not verify_send
+    if verify_send:
+        probed_after = _probe_input_text(_log, t0, collapse_after=False)
+        if _input_still_has_message(probed_after, message):
+            _log_step(_log, t0, "send verify: input still has message, resend once")
+            # 轻量重试：先 collapse 再发；仍在则点输入框，丢字才重贴
+            _collapse_input_selection(_log, t0)
+            _do_send(2, collapse=False)
+            probed_after = _probe_input_text(_log, t0, collapse_after=False)
+            if _input_still_has_message(probed_after, message) and focus_input:
+                _focus_chat_input(_log, t0, wcfg, attempt=2)
+                re_probe = _probe_input_text(_log, t0, collapse_after=True)
+                if not _input_matches_message(re_probe, message):
+                    _log_step(_log, t0, "resend: re-paste message before final try")
+                    _clear_chat_input(_log, t0)
+                    _critical_paste(message, log=_log, t0=t0, label="message-retry")
+                    time.sleep(after_message_sleep)
+                    _collapse_input_selection(_log, t0)
+                _do_send(3, collapse=False)
+                probed_after = _probe_input_text(_log, t0, collapse_after=False)
+        if _input_still_has_message(probed_after, message):
+            snap = _snapshot_on_fail(_log, t0, wcfg, "send_verify")
+            out = {
+                "status": "fail",
+                "reason": (
+                    f"发送校验失败：输入框仍残留正文，未能确认发给「{display}」"
+                    f"（搜索「{query}」，mode={send_mode}）。"
+                ),
+                "display": display,
+                "query": query,
+                "elapsed_s": round(time.perf_counter() - t0, 2),
+            }
+            if snap:
+                out["fail_screenshot"] = snap
+            return out
+        send_verified = True
+        _log_step(_log, t0, "send verify: ok (input cleared)")
+
+    # 可选：仅 gates.send=true 时做视觉校验（默认关闭）
+    if gflags["send"]:
+        from macrun.gate import gate2_send_verify
+
+        _log_step(_log, t0, "gate2: vision verify send (optional)")
+        try:
+            gate2 = gate2_send_verify(display, message, log=_log)
             _log_step(
                 _log,
                 t0,
-                f"gate2 retry sent={gate2.get('sent')} reason={gate2.get('reason')}",
+                f"gate2 sent={gate2.get('sent')} reason={gate2.get('reason')}",
             )
             if not gate2.get("sent"):
                 return {
                     "status": "fail",
                     "reason": (
-                        f"Gate2 判定未成功发送给「{contact}」"
-                        f"（{gate2.get('reason') or 'unverified'}）。"
-                        f"未报告假成功。"
+                        f"Gate2 判定未成功发送给「{display}」（搜索「{query}」）"
+                        f"（{gate2.get('reason') or 'unverified'}）"
                     ),
-                    "gate1": gate1,
+                    "display": display,
+                    "query": query,
                     "gate2": gate2,
                     "elapsed_s": round(time.perf_counter() - t0, 2),
                 }
-            send_mode = alt
+        except Exception as e:
+            return {
+                "status": "fail",
+                "reason": f"Gate2 视觉验收失败：{e}",
+                "display": display,
+                "query": query,
+                "elapsed_s": round(time.perf_counter() - t0, 2),
+            }
 
     elapsed = time.perf_counter() - t0
+    verify_note = "剪贴板校验" if send_verified and verify_send else "未校验"
+    if gflags["send"]:
+        verify_note = f"{verify_note}+视觉"
     result = (
-        f"已向「{contact}」发送消息（{len(message)} 字，{elapsed:.1f}s，"
-        f"mode={send_mode}，gates=on）。Gate1/Gate2 已通过。"
+        f"已向「{display}」发送消息（搜索「{query}」，{len(message)} 字，"
+        f"{elapsed:.1f}s，mode={send_mode}，{verify_note}）。"
     )
     _log(f"FINISH: {result}")
     return {
         "status": "success",
         "result": result,
-        "contact": contact,
+        "contact": display,
+        "display": display,
+        "query": query,
         "message": message,
-        "mode": "wechat-script+gates",
+        "mode": "wechat-remark-suffix",
         "send_mode": send_mode,
-        "gate1": gate1,
-        "gate2": gate2,
+        "verify_send": verify_send,
+        "paste_verified": bool(verify_send and paste_ok),
+        "send_verified": bool(send_verified and verify_send),
         "elapsed_s": round(elapsed, 2),
     }
-
-
-def _format_messages_for_clipboard(session: str, messages: list[dict[str, Any]]) -> str:
-    lines = [f"微信会话「{session}」最近 {len(messages)} 条消息：", ""]
-    for m in messages:
-        sender = m.get("sender") or "未知"
-        text = m.get("text") or ""
-        t = m.get("time") or ""
-        prefix = f"[{t}] " if t else ""
-        lines.append(f"{m.get('index', '')}. {prefix}{sender}: {text}")
-    return "\n".join(lines).strip() + "\n"
 
 
 def is_wechat_read_goal(goal: str) -> bool:
@@ -445,7 +819,11 @@ def read_messages(
     config: dict[str, Any] | None = None,
     to_clipboard: bool = True,
 ) -> dict[str, Any]:
-    """打开会话 + 视觉抽取最近 N 条 + 可选写入剪贴板。"""
+    """备注后缀打开会话 + 截图落盘（不调视觉模型）。
+
+    last_n 保留兼容 CLI，当前不解析消息条数，仅截当前可见聊天窗口。
+    默认保存到 /tmp/wechat_screenshot.jpg（缩放+JPEG，人工可读）。
+    """
 
     def _log(msg: str) -> None:
         if log:
@@ -455,150 +833,96 @@ def read_messages(
 
     t0 = _ts()
     session = (session or "").strip()
-    last_n = max(1, min(int(last_n or 5), 30))
+    # 兼容旧 CLI 参数，读消息截图模式不再按条数 OCR
+    _ = max(1, min(int(last_n or 5), 30))
     if not session:
         return {"status": "fail", "reason": "session empty"}
 
     wcfg = config if config is not None else _wechat_cfg()
-    _log(f"wechat-read start session={session!r} last_n={last_n}")
+    shot_path = str(
+        wcfg.get("read_screenshot_path") or DEFAULT_READ_SCREENSHOT
+    ).strip() or DEFAULT_READ_SCREENSHOT
+    scroll = bool(wcfg.get("read_scroll_once", False))
+    # 人工识别优先：默认最长边 1600、JPEG 质量 80
+    max_side = int(wcfg.get("read_screenshot_max_side") or 1600)
+    jpeg_q = int(wcfg.get("read_screenshot_jpeg_quality") or 80)
+    compress = bool(wcfg.get("read_screenshot_compress", True))
+    _log(f"wechat-read start session={session!r} mode=screenshot-only")
 
     opened = open_session(session, _log, t0, wcfg)
     if opened.get("status") != "ok":
         opened["elapsed_s"] = round(time.perf_counter() - t0, 2)
         return opened
-    gate1 = opened.get("gate1")
+    display = str(opened.get("display") or session)
+    query = str(opened.get("query") or session)
 
-    # 轻微上滚，尽量露出更多历史（可选第二张图）
-    scroll = bool(wcfg.get("read_scroll_once", True))
-    messages: list[dict[str, Any]] = []
-    gate_read: dict[str, Any] | None = None
+    act.ensure_front("WeChat", settle=0.25)
+    time.sleep(0.15)
+    if not _is_wechat_front():
+        act.ensure_front("WeChat", settle=0.3)
+        time.sleep(0.12)
 
-    def _do_read(hint: str = "") -> dict[str, Any]:
-        act.ensure_front("WeChat", settle=0.25)
-        time.sleep(0.2)
-        if not _is_wechat_front():
-            act.ensure_front("WeChat", settle=0.3)
-            time.sleep(0.15)
-        return gate_read_messages(
-            session, last_n=last_n, log=_log, extra_hint=hint
-        )
-
-    _log_step(_log, t0, "gate-read: extract messages from chat view")
-    try:
-        gate_read = _do_read()
-    except Exception as e:
-        return {
-            "status": "fail",
-            "reason": f"读消息视觉失败：{e}",
-            "gate1": gate1,
-            "elapsed_s": round(time.perf_counter() - t0, 2),
-        }
-    _log_step(
-        _log,
-        t0,
-        f"gate-read in_session={gate_read.get('in_session')} "
-        f"n={len(gate_read.get('messages') or [])} conf={gate_read.get('confidence')} "
-        f"reason={gate_read.get('reason')}",
-    )
-
-    if not gate_read.get("in_session"):
-        # 常见：截图时焦点被 WorkBuddy/IDE 抢走
-        _log_step(_log, t0, "gate-read not in session → re-front WeChat and retry once")
-        try:
-            gate_read = _do_read(
-                "请确认是否为微信聊天窗口；忽略背后 IDE/编辑器。"
-            )
-        except Exception as e:
-            return {
-                "status": "fail",
-                "reason": f"读消息重试失败：{e}",
-                "gate1": gate1,
-                "elapsed_s": round(time.perf_counter() - t0, 2),
-            }
-        _log_step(
-            _log,
-            t0,
-            f"gate-read retry in_session={gate_read.get('in_session')} "
-            f"n={len(gate_read.get('messages') or [])} reason={gate_read.get('reason')}",
-        )
-
-    if not gate_read.get("in_session"):
-        return {
-            "status": "fail",
-            "reason": (
-                f"未确认已进入会话「{session}」"
-                f"（{gate_read.get('reason') or 'in_session=false'}）"
-            ),
-            "gate1": gate1,
-            "gate_read": gate_read,
-            "elapsed_s": round(time.perf_counter() - t0, 2),
-        }
-
-    messages = list(gate_read.get("messages") or [])
-
-    # 不足 N 条时上滚再读一次合并
-    if scroll and len(messages) < last_n:
-        _log_step(_log, t0, "scroll up once for more history")
-        act.ensure_front("WeChat", settle=0.1)
-        # Page Up / 触控板式：多次 key up 或 pageup
+    # 可选轻微上滚，露出更多历史后再截（默认关，更快）
+    if scroll:
+        _log_step(_log, t0, "scroll up once before screenshot")
         for _ in range(3):
             act.hotkey("up", app_name="WeChat", ensure=False, settle=0.02)
             time.sleep(0.05)
-        time.sleep(0.25)
-        try:
-            gate_read2 = gate_read_messages(
-                session,
-                last_n=last_n,
-                log=_log,
-                extra_hint="这是向上滚动后的截图，请继续抽取可见消息。",
-            )
-            more = list(gate_read2.get("messages") or [])
-            # 简单合并去重（按 text+sender）
-            seen = {(m.get("sender"), m.get("text")) for m in messages}
-            for m in more:
-                key = (m.get("sender"), m.get("text"))
-                if key not in seen:
-                    messages.append(m)
-                    seen.add(key)
-            # 只保留最后 last_n 条（按 index 或列表尾部）
-            if len(messages) > last_n:
-                messages = messages[-last_n:]
-                for i, m in enumerate(messages, 1):
-                    m["index"] = i
-            _log_step(_log, t0, f"after scroll merged n={len(messages)}")
-        except Exception as e:
-            _log_step(_log, t0, f"second read skipped: {e}")
+        time.sleep(0.2)
 
-    if not messages:
+    _log_step(
+        _log,
+        t0,
+        f"screenshot chat window → {shot_path} "
+        f"(compress={compress} max_side={max_side} q={jpeg_q})",
+    )
+    try:
+        saved = vision.capture_front_window_to(
+            dest=shot_path,
+            owner_names=["WeChat", "微信", "Weixin"],
+            max_side=max_side,
+            quality=jpeg_q,
+            compress=compress,
+        )
+    except Exception as e:
         return {
             "status": "fail",
-            "reason": f"未能从「{session}」抽取到消息文本",
-            "gate1": gate1,
-            "gate_read": gate_read,
+            "reason": (
+                f"截取「{display}」聊天窗口失败：{e}。"
+                f"请确认已进入会话（备注「{query}」）且已授权屏幕录制。"
+            ),
+            "display": display,
+            "query": query,
             "elapsed_s": round(time.perf_counter() - t0, 2),
         }
 
-    text = _format_messages_for_clipboard(session, messages)
+    size = Path(saved).stat().st_size
+    _log_step(_log, t0, f"screenshot saved bytes={size} path={saved}")
+
+    note = (
+        f"微信会话「{display}」聊天窗口截图已保存：\n"
+        f"{saved}\n"
+        f"（搜索「{query}」，无视觉 OCR；请打开图片查看记录）\n"
+    )
     if to_clipboard:
-        act.set_clipboard(text)
-        _log_step(_log, t0, f"clipboard set ({len(text)} chars)")
+        act.set_clipboard(note)
+        _log_step(_log, t0, f"clipboard set path note ({len(note)} chars)")
 
     elapsed = time.perf_counter() - t0
     summary = (
-        f"已读取「{session}」最近 {len(messages)} 条消息（{elapsed:.1f}s），"
-        f"{'并复制到剪贴板' if to_clipboard else '未写剪贴板'}。"
+        f"已打开「{display}」并截图保存到 {saved}"
+        f"（搜索「{query}」，{elapsed:.1f}s，无视觉模型）。"
     )
     _log(f"FINISH: {summary}")
-    _log("--- messages ---")
-    _log(text.rstrip())
     return {
         "status": "success",
         "result": summary,
-        "session": session,
-        "messages": messages,
-        "clipboard_text": text,
-        "gate1": gate1,
-        "gate_read": gate_read,
+        "session": display,
+        "display": display,
+        "query": query,
+        "screenshot_path": str(saved),
+        "clipboard_text": note if to_clipboard else "",
+        "messages": [],
         "elapsed_s": round(elapsed, 2),
-        "mode": "wechat-read",
+        "mode": "wechat-read-screenshot",
     }

@@ -139,32 +139,53 @@ def hotkey(
     return f"hotkey {'+'.join(keys)}"
 
 
+def _press_return_once(*, cmd: bool = False) -> None:
+    """单次 Return / Cmd+Return（System Events）。
+
+    不用 ax.hotkey('return')：那边会 CGEvent + osascript 双发，
+    在 Enter 发送模式下可能连发空消息或打乱状态。
+    """
+    if cmd:
+        script = (
+            'tell application "System Events" to '
+            "keystroke return using command down"
+        )
+    else:
+        script = 'tell application "System Events" to key code 36'
+    subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+
 def send_chat(
     app_name: str | None = None,
-    mode: str = "both",
+    mode: str = "enter",
     ensure: bool = True,
 ) -> str:
     """发送聊天消息。
 
     mode:
-      - both: 先 Cmd+Return 再 Return（默认，兼容两种微信设置）
-      - enter / return: 仅 Return
+      - enter / return: 仅 Return（本机微信「Enter 发送」推荐）
       - cmd_enter: 仅 Cmd+Return
+      - both: 先 Cmd+Return 再 Return（兼容未知设置，略慢）
     """
-    mode = (mode or "both").lower().strip()
+    mode = (mode or "enter").lower().strip()
     if mode in ("cmd+enter",):
         mode = "cmd_enter"
     if mode == "return":
         mode = "enter"
     if ensure:
         ensure_front(app_name, settle=0.12)
-    time.sleep(0.08)
+    time.sleep(0.06)
     if mode in ("both", "cmd_enter"):
-        ax.hotkey("cmd", "return")
-        time.sleep(0.10)
+        _press_return_once(cmd=True)
+        time.sleep(0.08)
     if mode in ("both", "enter"):
-        ax.hotkey("return")
-        time.sleep(0.06)
+        _press_return_once(cmd=False)
+        time.sleep(0.05)
     return f"send_chat: mode={mode}"
 
 

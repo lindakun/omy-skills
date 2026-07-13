@@ -25,29 +25,49 @@ agent:
   ax_max_depth: 6
   step_delay: 0.35
 
-# 微信：脚本推进 + 关卡式视觉（Gate1 选人 / Gate2 发送校验）
+# 微信：备注后缀脚本选人 + 可选视觉（发送/读消息）
 wechat:
-  # 发送键：both | enter | cmd_enter
-  send_mode: both
-  # 是否启用视觉 Gate（失败直接 FAIL，不盲进）
-  gates_enabled: true
-  # Gate 视觉超时/压缩（独立于通用 agent 截图，避免过慢）
-  gate_timeout: 60
-  gate_max_side: 960
-  gate_jpeg_quality: 45
-  # 读消息视觉（可更长）
-  gate_read_timeout: 90
-  gate_read_max_side: 800
-  gate_read_jpeg_quality: 40
+  # —— 备注后缀唯一定位（选人不用视觉）——
+  # 口语名 LvLLM → 搜索 LvLLM-1688；请在微信把联系人/群备注统一加此后缀
+  remark_suffix: "-1688"
+  remark_suffix_enabled: true
+  # 无法改备注的系统会话（精确匹配，不拼后缀）
+  no_suffix_sessions:
+    - 文件传输助手
+  # 后缀搜索后如何打开第 1 条：enter（更快）| down_enter（部分版本更稳）
+  select_mode: enter
+
+  # 发送键：enter（Enter 发送，推荐）| cmd_enter | both（兼容未知设置）
+  send_mode: enter
+  # 选人后 Esc+点击底部输入带，避免正文粘进搜索框
+  focus_input: true
+  input_click_x_ratio: 0.58
+  input_click_bottom_inset: 70
+  # 剪贴板探测：粘贴后正文是否在输入框、发送后输入框是否清空（不调视觉）
+  verify_send: true
+  # 仅失败时截微信窗口到本地（成功路径不加时延）
+  fail_screenshot: true
+  fail_screenshot_path: /tmp/wechat_send_fail.jpg
+  # 默认全流程不调视觉。调试才开：
+  # gates:
+  #   send: true
+  gate_timeout: 90
+  gate_max_side: 720
+  gate_jpeg_quality: 40
   search_hotkey: [cmd, f]
   # 各阶段等待（秒）
   open_sleep: 0.35
-  search_sleep: 0.35
-  after_contact_sleep: 0.35
+  search_sleep: 0.28
+  after_contact_sleep: 0.40
   after_select_sleep: 0.45
-  after_message_sleep: 0.25
-  # 读消息：不足 N 条时是否上滚再截一屏
-  read_scroll_once: true
+  after_message_sleep: 0.22
+  # 读消息：只截图落盘，不调视觉；默认缩放+JPEG 便于人工看、体积小
+  read_screenshot_path: /tmp/wechat_screenshot.jpg
+  read_screenshot_compress: true
+  read_screenshot_max_side: 1600   # 最长边像素；0=不缩放
+  read_screenshot_jpeg_quality: 80 # 1-100，人工阅读建议 75-85
+  # 截图前是否轻微上滚（默认 false，更快）
+  read_scroll_once: false
 
 safety:
   # 命中这些词时拒绝执行（可继续扩展）
