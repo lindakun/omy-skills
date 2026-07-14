@@ -32,7 +32,7 @@ macrun wechat-send --contact "陈可欣" --message "晚上好" -l /tmp/mac_assis
 
 # 读会话：只截图，不 OCR
 macrun wechat-read --session "陈可欣" -l /tmp/mac_assistant.log
-# → /tmp/wechat_screenshot.jpg
+# → /tmp/wechat_screenshot_{会话}_{YYYYMMDD_HHMMSS}.jpg
 ```
 
 ### wechat-send 可靠性要点

@@ -75,18 +75,65 @@ def set_clipboard(text: str) -> str:
     return f"clipboard set ({len(text)} chars)"
 
 
-def ensure_front(app_name: str | None, settle: float = 0.15) -> bool:
-    """动作前强制前置目标 App。返回是否调用了 activate。"""
+def _app_is_front(app_name: str | None) -> bool:
     if not app_name:
         return False
     app = resolve_app_name(app_name)
     try:
-        ax.activate_app(name=app)
+        front = ax.frontmost_app_info()
     except Exception:
-        activate_app_by_name(app)
+        return False
+    blob = f"{front.get('name', '')} {front.get('bundle_id', '')}".lower()
+    app_l = app.lower()
+    if app_l in blob or app_l.replace(" ", "") in blob:
+        return True
+    # 微信中英文名
+    if app_l == "wechat":
+        return any(m in blob for m in ("wechat", "微信", "tencent.xinwechat"))
+    return False
+
+
+def ensure_front(
+    app_name: str | None,
+    settle: float = 0.08,
+    *,
+    retries: int = 1,
+    hard: bool = False,
+) -> bool:
+    """动作前尝试前置目标 App。返回是否确认已成为 frontmost。
+
+    默认轻量（1 次 activate、短 settle）。宿主抢焦点时往往永远 front 不了，
+    热路径应依赖 PostToPid 发键，而不是在这里空转重试。
+    hard=True 时才走 System Events / open -a（仅失败恢复用）。
+    """
+    if not app_name:
+        return False
+    app = resolve_app_name(app_name)
+    if _app_is_front(app):
+        if settle > 0:
+            time.sleep(settle)
+        return True
+    for attempt in range(max(1, retries)):
+        try:
+            ax.activate_app(name=app, hard=hard and attempt == 0)
+        except Exception:
+            activate_app_by_name(app)
+        if _app_is_front(app):
+            if settle > 0:
+                time.sleep(settle)
+            return True
+        if hard and attempt >= 0:
+            subprocess.run(
+                ["open", "-a", app],
+                capture_output=True,
+                text=True,
+            )
+            time.sleep(0.15)
+        else:
+            time.sleep(0.04)
     if settle > 0:
-        time.sleep(settle)
-    return True
+        time.sleep(min(settle, 0.06))
+    return _app_is_front(app)
 
 
 def paste_clipboard() -> str:
@@ -101,11 +148,13 @@ def clipboard_type(
 ) -> str:
     """中文/复杂文本：写入剪贴板并粘贴。"""
     if ensure:
-        ensure_front(app_name, settle=0.12)
+        ensure_front(app_name, settle=0.06)
     set_clipboard(text)
-    time.sleep(0.08)
-    paste_clipboard()
     time.sleep(0.05)
+    pid = _resolve_pid(app_name)
+    # 单通道 PostToPid（有 pid 时），避免 Cmd+V 双发导致正文重复
+    ax.press_key("cmd", "v", pid=pid)
+    time.sleep(0.04)
     return f"clipboard_typed ({len(text)} chars)"
 
 
@@ -120,7 +169,7 @@ def type_text(
     if prefer_clipboard or any(ord(c) > 127 for c in text):
         return clipboard_type(text, app_name=app_name, ensure=ensure)
     if ensure:
-        ensure_front(app_name, settle=0.12)
+        ensure_front(app_name, settle=0.06)
     ax.type_text_ascii(text)
     return f"typed ascii ({len(text)} chars)"
 
@@ -129,35 +178,43 @@ def hotkey(
     *keys: str,
     app_name: str | None = None,
     ensure: bool = True,
-    settle: float = 0.05,
+    settle: float = 0.03,
+    use_pid: bool = True,
 ) -> str:
+    """发送组合键。默认 PostToPid+HID（快，不依赖 frontmost）。
+
+    use_pid=False 时退回 ax.hotkey（Return 含 System Events，适合个别兼容场景）。
+    聊天发送请用 send_chat，勿对输入框 Return 走 ax.hotkey 双发。
+    """
     if ensure:
-        ensure_front(app_name, settle=0.12)
+        ensure_front(app_name, settle=0.05)
     if settle > 0:
         time.sleep(settle)
-    ax.hotkey(*keys)
+    pid = _resolve_pid(app_name) if use_pid else None
+    if use_pid:
+        ax.press_key(*keys, pid=pid)
+    else:
+        ax.hotkey(*keys)
     return f"hotkey {'+'.join(keys)}"
 
 
-def _press_return_once(*, cmd: bool = False) -> None:
-    """单次 Return / Cmd+Return（System Events）。
+def _resolve_pid(app_name: str | None) -> int | None:
+    if not app_name:
+        return None
+    try:
+        info = ax.find_app(name=resolve_app_name(app_name))
+        if info and info.get("pid"):
+            return int(info["pid"])
+    except Exception:
+        return None
+    return None
 
-    不用 ax.hotkey('return')：那边会 CGEvent + osascript 双发，
-    在 Enter 发送模式下可能连发空消息或打乱状态。
-    """
-    if cmd:
-        script = (
-            'tell application "System Events" to '
-            "keystroke return using command down"
-        )
-    else:
-        script = 'tell application "System Events" to key code 36'
-    subprocess.run(
-        ["osascript", "-e", script],
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
+
+def _press_return_once(*, cmd: bool = False, pid: int | None = None) -> None:
+    """单次 Return / Cmd+Return（仅进程内 CGEvent，不调 osascript）。"""
+    keys = ("cmd", "return") if cmd else ("return",)
+    ax.press_key(*keys, pid=pid)
+    time.sleep(0.03)
 
 
 def send_chat(
@@ -170,23 +227,25 @@ def send_chat(
     mode:
       - enter / return: 仅 Return（本机微信「Enter 发送」推荐）
       - cmd_enter: 仅 Cmd+Return
-      - both: 先 Cmd+Return 再 Return（兼容未知设置，略慢）
+      - both: 先 Cmd+Return 再 Return（兼容未知设置；Enter 发送时会多插换行，不推荐）
     """
     mode = (mode or "enter").lower().strip()
     if mode in ("cmd+enter",):
         mode = "cmd_enter"
     if mode == "return":
         mode = "enter"
+    pid = _resolve_pid(app_name)
+    front_ok = True
     if ensure:
-        ensure_front(app_name, settle=0.12)
-    time.sleep(0.06)
+        front_ok = ensure_front(app_name, settle=0.05, retries=1, hard=False)
+    time.sleep(0.02)
     if mode in ("both", "cmd_enter"):
-        _press_return_once(cmd=True)
-        time.sleep(0.08)
-    if mode in ("both", "enter"):
-        _press_return_once(cmd=False)
+        _press_return_once(cmd=True, pid=pid)
         time.sleep(0.05)
-    return f"send_chat: mode={mode}"
+    if mode in ("both", "enter"):
+        _press_return_once(cmd=False, pid=pid)
+        time.sleep(0.04)
+    return f"send_chat: mode={mode} front_ok={front_ok} pid={pid}"
 
 
 def click_node(node: dict[str, Any], pid: int | None = None) -> str:

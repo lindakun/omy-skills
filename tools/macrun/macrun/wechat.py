@@ -7,6 +7,7 @@ import re
 import subprocess
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -16,9 +17,67 @@ from macrun.config import load_config
 # 默认备注后缀；可用 config wechat.remark_suffix 覆盖
 DEFAULT_REMARK_SUFFIX = "-1688"
 DEFAULT_NO_SUFFIX_SESSIONS = ("文件传输助手",)
+DEFAULT_READ_SCREENSHOT_DIR = "/tmp"
+# 兼容旧配置键默认值（固定文件名已废弃，仅作目录推断）
 DEFAULT_READ_SCREENSHOT = "/tmp/wechat_screenshot.jpg"
 # 剪贴板探测用标记（不应与正常聊天正文冲突）
 _PROBE_CANARY_PREFIX = "__macrun_probe__"
+
+
+def _safe_filename_part(name: str, max_len: int = 48) -> str:
+    """会话名 → 文件名安全片段（保留中文，去掉路径非法字符）。"""
+    text = (name or "").strip()
+    if not text:
+        return "session"
+    bad = '\\/:*?"<>|\n\r\t'
+    out = "".join("_" if ch in bad else ch for ch in text)
+    out = out.strip(" ._") or "session"
+    if len(out) > max_len:
+        out = out[:max_len].rstrip(" ._") or "session"
+    return out
+
+
+def build_read_screenshot_path(
+    session_display: str,
+    wcfg: dict[str, Any] | None = None,
+    *,
+    when: datetime | None = None,
+) -> str:
+    """读消息截图路径：/tmp/wechat_screenshot_{会话}_{YYYYMMDD_HHMMSS}.jpg
+
+    配置：
+    - read_screenshot_dir: 目录（优先）
+    - read_screenshot_path: 若为目录或旧固定 .jpg，取其父目录；支持模板
+      {session}/{display}/{time}
+    """
+    cfg = wcfg or {}
+    ts = (when or datetime.now()).strftime("%Y%m%d_%H%M%S")
+    safe = _safe_filename_part(session_display)
+    default_name = f"wechat_screenshot_{safe}_{ts}.jpg"
+
+    raw_dir = str(cfg.get("read_screenshot_dir") or "").strip()
+    raw_path = str(cfg.get("read_screenshot_path") or "").strip()
+
+    # 显式模板：含 {session} / {display} / {time}
+    if raw_path and ("{" in raw_path and "}" in raw_path):
+        path = raw_path.format(session=safe, display=safe, time=ts)
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        return str(Path(path))
+
+    if raw_dir:
+        dest_dir = Path(raw_dir).expanduser()
+    elif raw_path:
+        p = Path(raw_path).expanduser()
+        # 旧配置 /tmp/wechat_screenshot.jpg → 目录 /tmp
+        if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
+            dest_dir = p.parent if str(p.parent) not in ("", ".") else Path(DEFAULT_READ_SCREENSHOT_DIR)
+        else:
+            dest_dir = p
+    else:
+        dest_dir = Path(DEFAULT_READ_SCREENSHOT_DIR)
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    return str(dest_dir / default_name)
 
 
 def normalize_message(message: str) -> str:
@@ -226,12 +285,13 @@ def _critical_hotkey(
     t0: float,
     label: str,
 ) -> None:
-    act.ensure_front("WeChat", settle=0.12)
-    act.hotkey(*keys, app_name="WeChat", ensure=False, settle=0.04)
-    if not _is_wechat_front():
-        _log_step(log, t0, f"{label}: focus lost, retry")
-        act.ensure_front("WeChat", settle=0.15)
-        act.hotkey(*keys, app_name="WeChat", ensure=False, settle=0.04)
+    """关键按键：轻量前置 + PostToPid。
+
+    宿主抢焦点时 frontmost 检查几乎总失败；不再因此双倍重试（可省数秒）。
+    真正失败由上层粘贴/发送校验兜底。
+    """
+    act.ensure_front("WeChat", settle=0.04, retries=1, hard=False)
+    act.hotkey(*keys, app_name="WeChat", ensure=False, settle=0.02, use_pid=True)
 
 
 def _critical_paste(
@@ -240,11 +300,8 @@ def _critical_paste(
     t0: float,
     label: str,
 ) -> None:
-    act.ensure_front("WeChat", settle=0.12)
+    act.ensure_front("WeChat", settle=0.04, retries=1, hard=False)
     act.clipboard_type(text, app_name="WeChat", ensure=False)
-    if not _is_wechat_front():
-        _log_step(log, t0, f"{label}: focus lost after paste, re-front")
-        act.ensure_front("WeChat", settle=0.12)
 
 
 def _clipboard_get() -> str:
@@ -306,10 +363,10 @@ def _focus_chat_input(
         nudge_y = -36.0
         nudge_x = -20.0
 
-    act.ensure_front("WeChat", settle=0.10)
+    act.ensure_front("WeChat", settle=0.04, retries=1, hard=False)
     # 关闭仍停留在搜索框的焦点
     _critical_hotkey("escape", log=log, t0=t0, label="focus-esc")
-    time.sleep(0.08)
+    time.sleep(0.04)
 
     bounds = _wechat_window_bounds()
     if not bounds:
@@ -325,22 +382,18 @@ def _focus_chat_input(
         f"focus input: click ({x:.0f},{y:.0f}) attempt={attempt} "
         f"win=({px:.0f},{py:.0f},{sw:.0f}x{sh:.0f})",
     )
-    act.ensure_front("WeChat", settle=0.06)
+    act.ensure_front("WeChat", settle=0.03, retries=1, hard=False)
     ax.click_xy(x, y)
-    time.sleep(0.10)
-    if not _is_wechat_front():
-        act.ensure_front("WeChat", settle=0.10)
-        ax.click_xy(x, y)
-        time.sleep(0.08)
+    time.sleep(0.06)
     return {"ok": True, "x": x, "y": y, "bounds": bounds, "attempt": attempt}
 
 
 def _clear_chat_input(log: Callable[[str], None], t0: float) -> None:
     """清空当前焦点处文本（假定已在输入框）。"""
     _critical_hotkey("cmd", "a", log=log, t0=t0, label="clear-select")
-    time.sleep(0.04)
+    time.sleep(0.03)
     _critical_hotkey("delete", log=log, t0=t0, label="clear-delete")
-    time.sleep(0.05)
+    time.sleep(0.03)
 
 
 def _collapse_input_selection(
@@ -353,11 +406,11 @@ def _collapse_input_selection(
     （输入框变空但消息未发出），导致假成功。
     Right 取消选区；Cmd+Down 跳到文末（多行更稳，几乎不耗时）。
     """
-    act.ensure_front("WeChat", settle=0.04)
-    act.hotkey("right", app_name="WeChat", ensure=False, settle=0.02)
+    act.ensure_front("WeChat", settle=0.02, retries=1, hard=False)
+    act.hotkey("right", app_name="WeChat", ensure=False, settle=0.01, use_pid=True)
+    time.sleep(0.015)
+    act.hotkey("cmd", "down", app_name="WeChat", ensure=False, settle=0.01, use_pid=True)
     time.sleep(0.02)
-    act.hotkey("cmd", "down", app_name="WeChat", ensure=False, settle=0.02)
-    time.sleep(0.03)
     if log:
         _log_step(log, t0, "collapse selection (right+cmd+down)")
 
@@ -400,13 +453,13 @@ def _probe_input_text(
     collapse_after=True 时取消全选，避免紧接着发送时把正文删掉。
     """
     canary = f"{_PROBE_CANARY_PREFIX}{uuid.uuid4().hex[:10]}"
-    act.ensure_front("WeChat", settle=0.08)
+    act.ensure_front("WeChat", settle=0.03, retries=1, hard=False)
     _clipboard_set(canary)
-    time.sleep(0.04)
-    act.hotkey("cmd", "a", app_name="WeChat", ensure=False, settle=0.03)
-    time.sleep(0.04)
-    act.hotkey("cmd", "c", app_name="WeChat", ensure=False, settle=0.03)
-    time.sleep(0.08)
+    time.sleep(0.025)
+    act.hotkey("cmd", "a", app_name="WeChat", ensure=False, settle=0.015, use_pid=True)
+    time.sleep(0.025)
+    act.hotkey("cmd", "c", app_name="WeChat", ensure=False, settle=0.015, use_pid=True)
+    time.sleep(0.05)
     got = _clipboard_get()
     if got == canary:
         _log_step(log, t0, "probe input: empty (canary unchanged)")
@@ -495,8 +548,8 @@ def open_session(
     found = ax.find_app(name="WeChat")
     if found:
         _log_step(log, t0, f"hot-start activate pid={found.get('pid')}")
-        act.ensure_front("WeChat", settle=0.15)
-        time.sleep(0.12)
+        # 热启动：一次轻量 activate 即可，宿主抢焦点时硬重试只浪费时间
+        act.ensure_front("WeChat", settle=0.06, retries=1, hard=False)
     else:
         _log_step(log, t0, "cold-start open WeChat")
         try:
@@ -504,13 +557,11 @@ def open_session(
             _log_step(log, t0, str(r))
         except Exception as e:
             _log_step(log, t0, f"open_app warn {e}")
-            act.ensure_front("WeChat", settle=0.2)
+            act.ensure_front("WeChat", settle=0.12, retries=2, hard=True)
         time.sleep(open_sleep)
 
     if not ax.find_app(name="WeChat"):
         return {"status": "fail", "reason": "WeChat not running after open/activate"}
-    if not _is_wechat_front():
-        act.ensure_front("WeChat", settle=0.18)
 
     front = ax.frontmost_app_info()
     _log_step(log, t0, f"frontmost={front.get('name')} active_ok={_is_wechat_front()}")
@@ -521,7 +572,7 @@ def open_session(
 
     # 清空搜索框再粘贴，避免残留关键字
     _critical_hotkey("cmd", "a", log=log, t0=t0, label="select-all")
-    time.sleep(0.04)
+    time.sleep(0.03)
     _log_step(log, t0, f"paste query {query!r}")
     _critical_paste(query, log=log, t0=t0, label="session")
     time.sleep(after_contact_sleep)
@@ -647,18 +698,26 @@ def send_message(
         return out
 
     def _do_send(attempt: int, *, collapse: bool = True) -> str:
-        # 粘贴校验已 collapse；首次发送可跳过二次 collapse 省约 50ms
+        # 粘贴校验已 collapse；首次发送可跳过二次 collapse
         if collapse:
             _collapse_input_selection(_log, t0)
         _log_step(_log, t0, f"send mode={send_mode} (attempt {attempt})")
-        act.ensure_front("WeChat", settle=0.08)
+        # 成功路径：轻量前置 + 点输入 + PostToPid 发键（不因 frontmost 失败而空转重试）
+        # 真正没发出去由 verify_send 检测后再 hard 重试
+        act.ensure_front("WeChat", settle=0.04, retries=1, hard=(attempt > 1))
+        if focus_input:
+            bounds = _wechat_window_bounds()
+            if bounds:
+                (px, py), (sw, sh) = bounds
+                x = px + sw * float(wcfg.get("input_click_x_ratio") or 0.58)
+                y = py + sh - float(wcfg.get("input_click_bottom_inset") or 70)
+                ax.click_xy(x, y)
+                time.sleep(0.04)
+                if attempt == 1:
+                    _log_step(_log, t0, f"send: re-click input ({x:.0f},{y:.0f})")
         send_result = act.send_chat(app_name="WeChat", mode=send_mode, ensure=False)
-        if not _is_wechat_front():
-            _log_step(_log, t0, "send: focus lost, resend key once")
-            act.ensure_front("WeChat", settle=0.12)
-            send_result = act.send_chat(app_name="WeChat", mode=send_mode, ensure=False)
         _log_step(_log, t0, str(send_result))
-        time.sleep(0.28)
+        time.sleep(0.18)
         return str(send_result)
 
     # 粘贴探测刚 collapse 过，首次发送不再重复
@@ -822,7 +881,7 @@ def read_messages(
     """备注后缀打开会话 + 截图落盘（不调视觉模型）。
 
     last_n 保留兼容 CLI，当前不解析消息条数，仅截当前可见聊天窗口。
-    默认保存到 /tmp/wechat_screenshot.jpg（缩放+JPEG，人工可读）。
+    默认保存到 /tmp/wechat_screenshot_{会话}_{YYYYMMDD_HHMMSS}.jpg（缩放+JPEG）。
     """
 
     def _log(msg: str) -> None:
@@ -839,9 +898,6 @@ def read_messages(
         return {"status": "fail", "reason": "session empty"}
 
     wcfg = config if config is not None else _wechat_cfg()
-    shot_path = str(
-        wcfg.get("read_screenshot_path") or DEFAULT_READ_SCREENSHOT
-    ).strip() or DEFAULT_READ_SCREENSHOT
     scroll = bool(wcfg.get("read_scroll_once", False))
     # 人工识别优先：默认最长边 1600、JPEG 质量 80
     max_side = int(wcfg.get("read_screenshot_max_side") or 1600)
@@ -855,6 +911,8 @@ def read_messages(
         return opened
     display = str(opened.get("display") or session)
     query = str(opened.get("query") or session)
+    # 用口语展示名（非搜索 query）生成唯一文件名，避免覆盖
+    shot_path = build_read_screenshot_path(display, wcfg)
 
     act.ensure_front("WeChat", settle=0.25)
     time.sleep(0.15)

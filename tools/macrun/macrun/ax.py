@@ -54,6 +54,13 @@ try:
             kCGMouseButtonLeft,
         )
 
+        # CGEventPostToPid：把键鼠事件直接投递给目标进程，不依赖 frontmost。
+        # WorkBuddy 等宿主抢焦点时，HID 全局键常打到宿主；PostToPid 可绕过。
+        try:
+            from Quartz import CGEventPostToPid  # type: ignore
+        except Exception:  # pragma: no cover
+            CGEventPostToPid = None  # type: ignore
+
         _AX_OK = True
     else:
         _ERR = f"macrun 仅支持 macOS，当前: {platform.system()}"
@@ -164,8 +171,17 @@ def find_app(
     return None
 
 
-def activate_app(pid: int | None = None, name: str | None = None) -> dict[str, Any]:
-    """前置指定 App（解决 WorkBuddy 等宿主抢走焦点后 AX 仍读宿主的问题）。"""
+def activate_app(
+    pid: int | None = None,
+    name: str | None = None,
+    *,
+    hard: bool = False,
+) -> dict[str, Any]:
+    """前置指定 App。
+
+    hard=False（默认）：只做 NSRunningApplication.activate，约 50ms，适合热路径。
+    hard=True：额外 System Events set frontmost（osascript，慢，仅冷启动/发送失败重试用）。
+    """
     require_darwin()
     if not _AX_OK:
         raise RuntimeError(_ERR)
@@ -186,12 +202,44 @@ def activate_app(pid: int | None = None, name: str | None = None) -> dict[str, A
     if target is None:
         raise RuntimeError(f"activate_app: not found pid={pid} name={name}")
 
-    # NSApplicationActivateIgnoringOtherApps = 1 << 1 = 2
-    ok = target.activateWithOptions_(2)
     import time
 
-    # 短等待即可；外层 ensure_front 还会再 settle
-    time.sleep(0.12)
+    try:
+        target.unhide()
+    except Exception:
+        pass
+    # 1=AllWindows, 2=IgnoringOtherApps → 3
+    ok = target.activateWithOptions_(3)
+    time.sleep(0.05 if not hard else 0.08)
+
+    if hard:
+        front_ok = False
+        try:
+            front = frontmost_app_info()
+            front_ok = int(front.get("pid") or 0) == int(target.processIdentifier())
+        except Exception:
+            front_ok = False
+        if not front_ok:
+            try:
+                import subprocess
+
+                bid = str(target.bundleIdentifier() or "")
+                if bid:
+                    subprocess.run(
+                        [
+                            "osascript",
+                            "-e",
+                            "tell application \"System Events\" to set frontmost of "
+                            f"first process whose bundle identifier is \"{bid}\" to true",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    time.sleep(0.08)
+            except Exception:
+                pass
+
     return {
         "name": str(target.localizedName() or ""),
         "bundle_id": str(target.bundleIdentifier() or ""),
@@ -524,19 +572,11 @@ _KEYCODES = {
 }
 
 
-def hotkey(*keys: str) -> None:
-    """组合键，如 hotkey('cmd', 'v') / hotkey('return')。
-
-    Return/Enter 额外走 System Events，微信等 App 对纯 CGEvent 回车经常吞掉。
-    """
-    import time
-
-    require_darwin()
-    if not _AX_OK:
-        raise RuntimeError(_ERR)
+def _keycode_and_flags(keys: list[str]) -> tuple[int | None, int, str | None]:
+    """解析组合键 → (keycode, flags, main_key)。"""
     keys_l = [k.lower().strip() for k in keys if k]
     if not keys_l:
-        return
+        return None, 0, None
     flags = 0
     main = None
     for k in keys_l:
@@ -555,6 +595,94 @@ def hotkey(*keys: str) -> None:
     code = _KEYCODES.get(main)
     if code is None and len(main) == 1:
         code = _KEYCODES.get(main.lower())
+    return code, flags, main
+
+
+def post_key_to_pid(pid: int, *keys: str) -> bool:
+    """向指定 PID 投递按键（不依赖 frontmost）。失败返回 False。"""
+    import time
+
+    require_darwin()
+    if not _AX_OK or CGEventPostToPid is None:
+        return False
+    code, flags, main = _keycode_and_flags([k for k in keys if k])
+    if code is None or main is None:
+        return False
+    try:
+        down = CGEventCreateKeyboardEvent(None, code, True)
+        up = CGEventCreateKeyboardEvent(None, code, False)
+        CGEventSetFlags(down, flags)
+        CGEventSetFlags(up, flags)
+        CGEventPostToPid(int(pid), down)
+        time.sleep(0.03)
+        CGEventPostToPid(int(pid), up)
+        return True
+    except Exception:
+        return False
+
+
+def press_key(*keys: str, pid: int | None = None, also_hid: bool | None = None) -> None:
+    """进程内按键。
+
+    默认策略（避免双发）：
+    - 有 pid 且 PostToPid 可用 → 只投递给目标进程（宿主抢焦点时仍能进微信）
+    - 否则 → 只走 HID 全局
+    also_hid=True 可强制双通道（不推荐，Cmd+V/Return 可能执行两次）。
+    """
+    import time
+
+    require_darwin()
+    if not _AX_OK:
+        raise RuntimeError(_ERR)
+    code, flags, main = _keycode_and_flags([k for k in keys if k])
+    if main is None:
+        return
+    if code is None:
+        _type_unicode(main)
+        return
+
+    use_pid = pid is not None and CGEventPostToPid is not None
+    # 默认单通道：有 pid 用 PostToPid，否则 HID。显式 also_hid=True 才双发。
+    if also_hid is None:
+        also_hid = not use_pid
+
+    if use_pid:
+        try:
+            down = CGEventCreateKeyboardEvent(None, code, True)
+            up = CGEventCreateKeyboardEvent(None, code, False)
+            CGEventSetFlags(down, flags)
+            CGEventSetFlags(up, flags)
+            CGEventPostToPid(int(pid), down)
+            time.sleep(0.02)
+            CGEventPostToPid(int(pid), up)
+        except Exception:
+            # PostToPid 失败则回退 HID
+            also_hid = True
+
+    if also_hid:
+        down2 = CGEventCreateKeyboardEvent(None, code, True)
+        up2 = CGEventCreateKeyboardEvent(None, code, False)
+        CGEventSetFlags(down2, flags)
+        CGEventSetFlags(up2, flags)
+        CGEventPost(kCGHIDEventTap, down2)
+        time.sleep(0.025)
+        CGEventPost(kCGHIDEventTap, up2)
+
+
+def hotkey(*keys: str) -> None:
+    """组合键，如 hotkey('cmd', 'v') / hotkey('return')。
+
+    常规路径用 HID CGEvent。Return/Enter 额外走 System Events 双保险
+    （搜索选人等场景）；聊天发送请用 act.send_chat / press_key，避免双发。
+    """
+    import time
+
+    require_darwin()
+    if not _AX_OK:
+        raise RuntimeError(_ERR)
+    code, flags, main = _keycode_and_flags([k for k in keys if k])
+    if main is None:
+        return
     if code is None:
         _type_unicode(main)
         return
@@ -568,7 +696,7 @@ def hotkey(*keys: str) -> None:
     time.sleep(0.03)
     CGEventPost(kCGHIDEventTap, up)
 
-    # Return/Enter：System Events 双保险（微信聊天框更认这条路径）
+    # Return/Enter：System Events 双保险（选搜索结果等）
     if main in ("return", "enter"):
         time.sleep(0.04)
         try:

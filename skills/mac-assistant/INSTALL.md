@@ -94,7 +94,7 @@ macrun run "打开 TextEdit，输入 Hello mac-assistant"
 ```bash
 # 读：应看到 query='…-1688'、screenshot saved；打开图确认会话
 macrun wechat-read --session "文件传输助手" -l /tmp/mac_assistant.log
-# 打开 /tmp/wechat_screenshot.jpg
+# 打开日志中 SCREENSHOT: 指向的路径（含会话名与时间戳）
 
 # 发：须出现 paste verify: ok 与 send verify: ok
 macrun wechat-send --contact "文件传输助手" \

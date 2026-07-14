@@ -37,7 +37,8 @@ wechat:
   # 后缀搜索后如何打开第 1 条：enter（更快）| down_enter（部分版本更稳）
   select_mode: enter
 
-  # 发送键：enter（Enter 发送，推荐）| cmd_enter | both（兼容未知设置）
+  # 发送键：enter（本机「Enter 发送」，推荐）| cmd_enter（「⌘Enter 发送」）
+  # both 会在 Enter 模式下先 Cmd+Enter 插入换行，不推荐
   send_mode: enter
   # 选人后 Esc+点击底部输入带，避免正文粘进搜索框
   focus_input: true
@@ -62,7 +63,10 @@ wechat:
   after_select_sleep: 0.45
   after_message_sleep: 0.22
   # 读消息：只截图落盘，不调视觉；默认缩放+JPEG 便于人工看、体积小
-  read_screenshot_path: /tmp/wechat_screenshot.jpg
+  # 读消息截图目录；文件名 wechat_screenshot_{会话}_{YYYYMMDD_HHMMSS}.jpg
+  read_screenshot_dir: /tmp
+  # 可选模板（优先于 dir）：/tmp/wechat_screenshot_{session}_{time}.jpg
+  # read_screenshot_path: /tmp/wechat_screenshot_{session}_{time}.jpg
   read_screenshot_compress: true
   read_screenshot_max_side: 1600   # 最长边像素；0=不缩放
   read_screenshot_jpeg_quality: 80 # 1-100，人工阅读建议 75-85

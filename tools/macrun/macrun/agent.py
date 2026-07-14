@@ -256,7 +256,7 @@ def execute_action(
     if name == "send":
         mode = "both"
         try:
-            mode = str((load_config().get("wechat") or {}).get("send_mode") or "both")
+            mode = str((load_config().get("wechat") or {}).get("send_mode") or "enter")
         except Exception:
             pass
         return act.send_chat(app_name=target, mode=mode)
@@ -270,7 +270,7 @@ def execute_action(
             state["pending_send"] = False
             mode = "both"
             try:
-                mode = str((load_config().get("wechat") or {}).get("send_mode") or "both")
+                mode = str((load_config().get("wechat") or {}).get("send_mode") or "enter")
             except Exception:
                 pass
             return act.send_chat(app_name=target, mode=mode)

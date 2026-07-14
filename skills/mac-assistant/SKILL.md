@@ -104,7 +104,7 @@ LOG=/tmp/mac_assistant.log; : > "$LOG"
 
 | 项 | 值 |
 |----|-----|
-| 默认截图路径 | `/tmp/wechat_screenshot.jpg`（缩放最长边 1600 + JPEG q80，人工可读） |
+| 默认截图路径 | `/tmp/wechat_screenshot_{会话}_{YYYYMMDD_HHMMSS}.jpg`（每次唯一，不覆盖；缩放最长边 1600 + JPEG q80） |
 | 视觉模型 | **不调用** |
 | Agent 后续 | 打开该图片查看/总结后回复用户 |
 
@@ -113,7 +113,8 @@ LOG=/tmp/mac_assistant.log; : > "$LOG"
 | 读群聊 LvLLM 最近消息 | LvLLM |
 | 看文件传输助手聊天 | 文件传输助手 |
 
-成功信号：`resolve query=...` → `select first result` → `screenshot saved` → `SCREENSHOT: /tmp/wechat_screenshot.jpg` → `✅ SUCCESS`。  
+成功信号：`resolve query=...` → `select first result` → `screenshot saved` → `SCREENSHOT: /tmp/wechat_screenshot_….jpg` → `✅ SUCCESS`。  
+**以日志中的 `SCREENSHOT:` 完整路径为准**（含会话名与时间戳，勿写死旧固定路径）。  
 **不要**再期待 macrun 输出逐条文字消息；请读截图。
 
 ---
@@ -152,7 +153,7 @@ wechat:
   verify_send: true            # 剪贴板探测粘贴/发送（非视觉）
   fail_screenshot: true        # 仅失败时截图 /tmp/wechat_send_fail.jpg
   # gates: { send: true }      # 仅调试时开发送视觉校验
-  read_screenshot_path: /tmp/wechat_screenshot.jpg
+  read_screenshot_dir: /tmp   # 文件名自动：wechat_screenshot_{会话}_{时间}.jpg
   read_screenshot_max_side: 1600
   read_screenshot_jpeg_quality: 80
   read_scroll_once: false
