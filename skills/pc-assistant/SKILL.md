@@ -1,9 +1,16 @@
 ---
 name: pc-assistant
-description: PC 桌面自动化助理（仅 Windows）。基于微软开源 UFO² 框架，将"使用电脑操作XXX"、"用电脑帮我XXX"、"在电脑上XXX"等自然语言指令，转化为 UFO² Agent 可执行的任务，在 Windows 桌面上自动完成 UI 操作（打开应用/点击/输入/读取信息等），并将执行结果在当前对话中回复给用户。
+description: PC 桌面自动化助理（仅 Windows）。基于微软开源 UFO²
+  框架，将"使用电脑操作XXX"、"用电脑帮我XXX"、"在电脑上XXX"等自然语言指令，转化为 UFO² Agent 可执行的任务，在 Windows
+  桌面上自动完成 UI 操作（打开应用/点击/输入/读取信息等），并将执行结果在当前对话中回复给用户。
 metadata:
-  platforms: [windows]
-  requires: [python3.11, ufo2, uia]
+  platforms:
+    - windows
+  requires:
+    - python3.11
+    - ufo2
+    - uia
+disable: true
 ---
 
 # pc-assistant PC 桌面自动化助理

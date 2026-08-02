@@ -1,10 +1,18 @@
 ---
 name: mobile-assistant
-description: 手机自动化助理。将"帮我用手机打开B站搜索XX并把结果发我"这类自然语言指令，改写为 mobilerun 可执行的 goal，在已连接的 Android 设备上执行移动端自动化（打开APP/搜索/点击/读取屏幕信息），并将结果回复用户。依赖 adb 与 mobilerun。主机支持 macOS / Windows / Linux。
+description: 手机自动化助理。将"帮我用手机打开B站搜索XX并把结果发我"这类自然语言指令，改写为 mobilerun 可执行的
+  goal，在已连接的 Android 设备上执行移动端自动化（打开APP/搜索/点击/读取屏幕信息），并将结果回复用户。依赖 adb 与
+  mobilerun。主机支持 macOS / Windows / Linux。
 metadata:
-  platforms: [macos, windows, linux]
+  platforms:
+    - macos
+    - windows
+    - linux
   device: android
-  requires: [adb, mobilerun]
+  requires:
+    - adb
+    - mobilerun
+disable: true
 ---
 
 # mobile-assistant 手机自动化助理

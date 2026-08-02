@@ -36,6 +36,7 @@ CANDIDATES=(
   "$HOME/.agents/skills"
   "$HOME/.opencode/skills"
   "$HOME/.opencode/.opencode/skill"
+  "$HOME/.workbuddy/skills"
 )
 
 link_one() {
