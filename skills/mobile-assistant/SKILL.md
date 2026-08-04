@@ -1,17 +1,10 @@
 ---
 name: mobile-assistant
-description: 手机自动化助理。将"帮我用手机打开B站搜索XX并把结果发我"这类自然语言指令，改写为 mobilerun 可执行的
-  goal，在已连接的 Android 设备上执行移动端自动化（打开APP/搜索/点击/读取屏幕信息），并将结果回复用户。依赖 adb 与
-  mobilerun。主机支持 macOS / Windows / Linux。
+description: 手机自动化助理。将"帮我用手机打开B站搜索XX并把结果发我"这类自然语言指令，改写为 mobilerun 可执行的 goal，在已连接的 Android 设备上执行移动端自动化（打开APP/搜索/点击/读取屏幕信息），并将结果回复用户。依赖 adb 与 mobilerun。主机支持 macOS / Windows / Linux。
 metadata:
-  platforms:
-    - macos
-    - windows
-    - linux
+  platforms: [macos, windows, linux]
   device: android
-  requires:
-    - adb
-    - mobilerun
+  requires: [adb, mobilerun]
 disable: true
 ---
 
@@ -184,8 +177,74 @@ if ($config) {
 - **聊天列表**仍可能截图 + 多模态识别 snippet：  
   1. `adb shell am start -n com.tencent.mm/.ui.LauncherUI`  
   2. 等待数秒  
-  3. `adb shell screencap` + `adb pull`  
+  3. `adb shell screencap -p /sdcard/chatlist.png && adb pull /sdcard/chatlist.png chatlist.png`  
   4. 用读图能力识别列表预览并回复用户  
+- **坐标提醒**：截图按 1:1 物理像素（与 `wm size` 一致）保存，但预览工具会缩放显示。如果仅识别文本不需要点击，坐标问题不影响；如果需要后续点击操作，必须按「直接 adb 操作工作流」中步骤 C-D 获取真实物理坐标。
+
+## 直接 adb 操作工作流（绕过 mobilerun 限制）
+
+适用场景：当 mobilerun 无法可靠操作某些 APP 时（如淘宝弹窗/视频 Tab 拦截点击、微信聊天页屏蔽无障碍等），可以直接用 adb 命令完成截图→识别→点击的流程。
+
+### 步骤 A：启动目标 APP
+
+```bash
+# 方式一：adb shell am start（需知道 activity 名）
+adb shell am start -n com.xxx.xxx/.xxxActivity
+
+# 方式二：monkey 启动（只需包名，更通用）
+adb shell monkey -p com.xxx.xxx -c android.intent.category.LAUNCHER 1
+```
+
+### 步骤 B：截图并拉取到本地
+
+```bash
+# 1. 手机端截图
+adb shell screencap -p /sdcard/screen.png
+
+# 2. 拉取到本地（⚠️ Windows Git Bash 下必须用相对路径）
+cd "$REPO_ROOT"
+adb pull /sdcard/screen.png screen.png
+
+# 3. 通过多模态识别页面内容
+```
+
+> ⚠️ **adb pull 路径踩坑（Windows Git Bash）**：`adb pull /sdcard/x.png /absolute/path` 绝对路径会报 `No such file or directory`。**必须先 `cd` 到目标目录，再用相对路径 pull。**
+
+### 步骤 C：识别页面元素坐标（关键！）
+
+当需要点击某按钮/Tab 时，**绝对不能**靠截图视觉估算坐标！截图预览尺寸（如 720×1280）与屏幕物理尺寸（如 1080×1920）不一致，视觉估算必然点偏。
+
+正确方法——使用 `uiautomator dump` 获取元素真实物理坐标：
+
+```bash
+# 1. 导出 UI 层级
+adb shell uiautomator dump /sdcard/ui.xml
+
+# 2. 拉取到本地
+adb pull /sdcard/ui.xml ui.xml
+
+# 3. 解析，查找目标元素的 bounds
+cat ui.xml | grep -E "按钮文本|购物车|暂不" | grep -oE 'bounds="[^"]*"'
+# 输出示例：bounds="[648,1624][864,1792]"
+
+# 4. 计算中心点击坐标
+# x = (648 + 864) / 2 = 756
+# y = (1624 + 1792) / 2 = 1708
+```
+
+### 步骤 D：用物理坐标点击
+
+```bash
+adb shell input tap <X> <Y>   # X, Y 为物理像素坐标（与 `adb shell wm size` 一致）
+```
+
+> ⚠️ **adb input tap 坐标系踩坑**：`screencap` 截图按物理像素（如 1080×1920）保存，但预览/读图工具会缩放显示（如缩到 720×1280）。若用预览图的视觉坐标去 `input tap`，必然点偏。**永远用 `uiautomator dump` 获取 bounds 计算坐标，不做视觉估算。**
+
+### 步骤 E：迭代
+
+1. 点击后 `sleep 2-3` 等待页面渲染
+2. 重新截图拉取确认
+3. 重复步骤 B-D 直到完成目标操作
 
 ## 注意事项
 
