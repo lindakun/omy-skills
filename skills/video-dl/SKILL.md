@@ -20,39 +20,58 @@ metadata:
 
 ## 环境准备
 
-### 常量
+### 常量（按平台选择，勿跨平台混用）
 
 ```bash
-PYTHON=/Users/linda/.workbuddy/binaries/python/versions/3.13.12/bin/python3
-PIP_TARGET=/Users/linda/.workbuddy/binaries/python/envs/default
-YT_DLP=$PIP_TARGET/bin/yt-dlp
-FFMPEG=/opt/homebrew/bin/ffmpeg   # macOS Homebrew 路径
-NODE=/Users/linda/.workbuddy/binaries/node/versions/22.22.2/bin/node
+# macOS（Homebrew + 隔离运行时）
+#   PYTHON=/Users/<user>/.workbuddy/binaries/python/versions/3.13.12/bin/python3
+#   PIP_TARGET=/Users/<user>/.workbuddy/binaries/python/envs/default
+#   FFMPEG=/opt/homebrew/bin/ffmpeg
+#   NODE=/Users/<user>/.workbuddy/binaries/node/versions/22.22.2/bin/node
+
+# Windows（WinGet + 隔离运行时），以本机实际路径为准：
+PYTHON="C:/Users/Administrator/.workbuddy/binaries/python/versions/3.13.12/python.exe"
+PIP_TARGET="C:/Users/Administrator/.workbuddy/binaries/python/envs/default"
+YT_DLP="$PIP_TARGET/Scripts/yt-dlp.exe"
+FFMPEG="C:/Users/Administrator/AppData/Local/Microsoft/WinGet/Links/ffmpeg.exe"  # 已加入 PATH，可用 where ffmpeg 查
+NODE="C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2/node.exe"
 ```
+
+> **平台检测**：执行前先用 `uname -s`（macOS/Linux）或检查 `$env:OS` / `where ffmpeg`（Windows）确认当前主机，再选对应常量。**禁止**把 macOS 路径用在 Windows 上（反之亦然）。
 
 ### 首次安装
 
 ```bash
+# macOS
 $PYTHON -m venv $PIP_TARGET
 $PIP_TARGET/bin/pip install yt-dlp
+
+# Windows
+"$PYTHON" -m venv "$PIP_TARGET"
+"$PIP_TARGET/Scripts/pip.exe" install yt-dlp
 ```
 
 ### 更新
 
 ```bash
+# macOS
 $PIP_TARGET/bin/pip install -U yt-dlp
+
+# Windows
+"$PIP_TARGET/Scripts/pip.exe" install -U yt-dlp
 ```
 
 ### FFmpeg（强烈建议）
 
-Bilibili / YouTube 的高清视频通常音视频分轨，需要 FFmpeg 合并。**隔离 venv 的 PATH 不包含 Homebrew 路径**，需显式指定：
+Bilibili / YouTube 的高清视频通常音视频分轨，需要 FFmpeg 合并。**隔离 venv 的 PATH 不包含系统 FFmpeg**，需显式指定：
 
 ```bash
-# 安装（macOS）
-brew install ffmpeg
+# 安装
+#   macOS:  brew install ffmpeg
+#   Windows: winget install Gyan.FFmpeg   （安装后 PATH 里即有 ffmpeg.exe）
 
 # 验证（两条都需通过）
-which ffmpeg && ffmpeg -version >/dev/null 2>&1 && echo "ffmpeg OK"
+"$FFMPEG" -version >/dev/null 2>&1 && echo "ffmpeg OK" || echo "ffmpeg MISSING"
 ```
 
 缺失时 yt-dlp 产出分轨文件（如 `.f100026.mp4` + `.f30280.m4a`），需手动合并。
@@ -188,20 +207,17 @@ $FFMPEG -y -i '视频.fXXXXX.mp4' -i '音频.fXXXXX.m4a' -c copy '文件名.mp4'
 ### YouTube
 
 ```bash
-YT_DLP="/Users/linda/.workbuddy/binaries/python/envs/default/bin/yt-dlp"
-NODE="/Users/linda/.workbuddy/binaries/node/versions/22.22.2/bin/node"
-
 # 最佳画质（完整参数：cookies + JS运行时 + FFmpeg合并）
 $YT_DLP --no-playlist --cookies-from-browser chrome \
   --js-runtimes node:$NODE --remote-components ejs:github \
-  --ffmpeg-location /opt/homebrew/bin/ffmpeg \
+  --ffmpeg-location "$FFMPEG" \
   -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
   --merge-output-format mp4 -o "%(title)s.%(ext)s" "URL"
 
 # 限制 1080p
 $YT_DLP --no-playlist --cookies-from-browser chrome \
   --js-runtimes node:$NODE --remote-components ejs:github \
-  --ffmpeg-location /opt/homebrew/bin/ffmpeg \
+  --ffmpeg-location "$FFMPEG" \
   -f "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best" \
   --merge-output-format mp4 -o "%(title)s.%(ext)s" "URL"
 
@@ -213,7 +229,7 @@ $YT_DLP --no-playlist --cookies-from-browser chrome \
 # 带字幕
 $YT_DLP --no-playlist --cookies-from-browser chrome \
   --js-runtimes node:$NODE --remote-components ejs:github \
-  --ffmpeg-location /opt/homebrew/bin/ffmpeg \
+  --ffmpeg-location "$FFMPEG" \
   -f "bestvideo+bestaudio" --merge-output-format mp4 \
   --write-subs --sub-lang zh-Hans,en --embed-subs -o "%(title)s.%(ext)s" "URL"
 
@@ -224,23 +240,19 @@ $YT_DLP -F "URL"
 ### X.com / Twitter
 
 ```bash
-YT_DLP="/Users/linda/.workbuddy/binaries/python/envs/default/bin/yt-dlp"
-
 # 基本下载（需要 Chrome cookies）
 $YT_DLP --no-playlist --cookies-from-browser chrome -o "%(title)s.%(ext)s" "URL"
 
-# Chrome cookies 失败时尝试 Safari
-$YT_DLP --no-playlist --cookies-from-browser safari -o "%(title)s.%(ext)s" "URL"
+# Chrome cookies 失败时尝试 Safari（Windows 可试 edge/firefox）
+$YT_DLP --no-playlist --cookies-from-browser edge -o "%(title)s.%(ext)s" "URL"
 ```
 
 ### Bilibili
 
 ```bash
-YT_DLP="/Users/linda/.workbuddy/binaries/python/envs/default/bin/yt-dlp"
-
 # 高清下载（推荐：cookies + 音视频合并）
 $YT_DLP --no-playlist --cookies-from-browser chrome \
-  --ffmpeg-location /opt/homebrew/bin/ffmpeg --merge-output-format mp4 \
+  --ffmpeg-location "$FFMPEG" --merge-output-format mp4 \
   -o "%(title)s.%(ext)s" "URL"
 
 # 匿名下载（低清，通常 ≤720p，不需要 FFmpeg）
@@ -253,8 +265,6 @@ $YT_DLP --no-playlist --write-subs --sub-lang all -o "%(title)s.%(ext)s" "URL"
 ### 通用（未知平台）
 
 ```bash
-YT_DLP="/Users/linda/.workbuddy/binaries/python/envs/default/bin/yt-dlp"
-
 # 先列出格式
 $YT_DLP -F "URL"
 # 选好格式后下载
@@ -292,7 +302,7 @@ $YT_DLP --no-playlist -f best -o "%(title)s.%(ext)s" "URL"
 | `Requested format not available` | 所选格式不存在 | 用 `-F` 列出实际可用格式，选存在的 |
 | 下载速度极慢 | 网络问题 | 尝试 `--limit-rate 10M` 或换代理 |
 | Bilibili 只能下 360p | 未登录 | 加 `--cookies-from-browser chrome` |
-| `WARNING: ffmpeg not found` | 缺少 FFmpeg 或 PATH 不包含 Homebrew | `brew install ffmpeg`；始终用 `--ffmpeg-location /opt/homebrew/bin/ffmpeg` 显式指定 |
+| `WARNING: ffmpeg not found` | 缺少 FFmpeg 或 PATH 不包含系统路径 | 安装：macOS `brew install ffmpeg` / Windows `winget install Gyan.FFmpeg`；始终用 `--ffmpeg-location "$FFMPEG"` 显式指定 |
 | X.com 视频为 0 字节 | 未传 cookies | 必须 `--cookies-from-browser` |
 | 出现 `n challenge solving failed` / 只有 storyboard 图片 | YouTube 反爬升级，缺 JS 运行时 | 加 `--js-runtimes node:$NODE --remote-components ejs:github` |
 | 产出两个分轨文件（`.fXXXXX.mp4` + `.fXXXXX.m4a`） | FFmpeg 未找到，yt-dlp 无法合并 | 用 `--ffmpeg-location` 显式指定；或手动 `ffmpeg -i 视频 -i 音频 -c copy 输出.mp4` |

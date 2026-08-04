@@ -24,7 +24,8 @@ $candidates = @(
     (Join-Path $env:USERPROFILE ".claude\skills"),
     (Join-Path $env:USERPROFILE ".codex\skills"),
     (Join-Path $env:USERPROFILE ".agents\skills"),
-    (Join-Path $env:USERPROFILE ".opencode\skills")
+    (Join-Path $env:USERPROFILE ".opencode\skills"),
+    (Join-Path $env:USERPROFILE ".workbuddy\skills")
 )
 
 Get-ChildItem -Directory $skillsSrc | ForEach-Object {
