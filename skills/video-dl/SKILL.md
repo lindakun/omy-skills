@@ -38,6 +38,8 @@ NODE="C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2/node.exe"
 ```
 
 > **平台检测**：执行前先用 `uname -s`（macOS/Linux）或检查 `$env:OS` / `where ffmpeg`（Windows）确认当前主机，再选对应常量。**禁止**把 macOS 路径用在 Windows 上（反之亦然）。
+> 
+> **⚠️ Windows Git Bash 特别注意**：yt-dlp 和 ffmpeg 是 Windows 原生 exe，**不认 MSYS 路径**（`/c/Users/...`、`/g/...`）。所有传给这些 exe 的路径（`-o`、`--ffmpeg-location`、`--js-runtimes` 等）必须用 **Windows 格式**：`C:/Users/...` 或 `C:\Users\...`。若误用 `/c/...` 格式，yt-dlp 会把它当作字面路径 `\c\...`，文件会写到当前盘根目录下的错误位置（如 `G:\c\Users\...`），且 ffmpeg 会报 `does not exist`。
 
 ### 首次安装
 
@@ -305,4 +307,5 @@ $YT_DLP --no-playlist -f best -o "%(title)s.%(ext)s" "URL"
 | `WARNING: ffmpeg not found` | 缺少 FFmpeg 或 PATH 不包含系统路径 | 安装：macOS `brew install ffmpeg` / Windows `winget install Gyan.FFmpeg`；始终用 `--ffmpeg-location "$FFMPEG"` 显式指定 |
 | X.com 视频为 0 字节 | 未传 cookies | 必须 `--cookies-from-browser` |
 | 出现 `n challenge solving failed` / 只有 storyboard 图片 | YouTube 反爬升级，缺 JS 运行时 | 加 `--js-runtimes node:$NODE --remote-components ejs:github` |
-| 产出两个分轨文件（`.fXXXXX.mp4` + `.fXXXXX.m4a`） | FFmpeg 未找到，yt-dlp 无法合并 | 用 `--ffmpeg-location` 显式指定；或手动 `ffmpeg -i 视频 -i 音频 -c copy 输出.mp4` |
+| `WARNING: ffmpeg-location ... does not exist` | Git Bash 路径转换：Windows exe 不认 MSYS `/c/...` 格式，当作字面 `\c\...` | **所有传给 yt-dlp/ffmpeg 的路径都必须用 Windows 格式**（`C:/Users/...` 或 `C:\Users\...`），禁止用 `/c/` MSYS 路径。`-o` 输出路径同理，否则文件会写到当前盘根目录下的 `\c\Users\...`（如 `G:\c\Users\...`） |
+| 产出两个分轨文件（`.fXXXXX.mp4` + `.fXXXXX.m4a`） | FFmpeg 未找到，yt-dlp 无法合并 | 用 `--ffmpeg-location` 显式指定（Windows 格式路径）；或手动用 PowerShell 调 ffmpeg 合并：`ffmpeg -y -i 视频 -i 音频 -c copy 输出.mp4`（PowerShell 原生路径不受 MSYS 转换干扰） |
