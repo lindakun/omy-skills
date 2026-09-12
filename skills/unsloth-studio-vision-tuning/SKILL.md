@@ -1,6 +1,6 @@
 ---
 name: unsloth-studio-vision-tuning
-description: 排查并调优 unsloth-studio 本地多模态（视觉）模型的部署参数。当出现"大图/高分辨率截图请求返回 HTTP 500"、"Could not reach an upstream service"、"llama-server 崩溃/SIGABRT"、加载参数未设置、上下文被压缩等情况时使用。覆盖根因定位（n_ubatch 断言）、参数矩阵实测、崩溃报告与日志取证。
+description: 排查并调优 unsloth-studio 本地多模态（视觉）模型的部署参数。当出现"大图/高分辨率截图请求返回 HTTP 500"、"Could not reach an upstream service"、"llama-server 崩溃/SIGABRT"、加载参数未设置、上下文被压缩、输出重复循环/空白刷屏/大量空格等症状时使用。覆盖根因定位（n_ubatch 断言、空格对齐失控）、参数矩阵实测、崩溃报告与日志取证。
 metadata:
   platforms: [macos, linux]
   requires: [python3, curl, unsloth-studio]
@@ -209,27 +209,86 @@ for k,v,t in con.execute('SELECT key,value_json,updated_at FROM app_settings'): 
 ### 🚨 最危险的地方：`.strip()` 会完美掩盖它
 
 ```python
-text = (msg.get("content") or "").strip()   # ← 247K 空格被全部抹掉，输出看起来"很干净"
+text = (msg["content"] or "").strip()   # ← 247K 空格被全部抹掉，输出看起来"很干净"
 ```
 
 **肉眼审查 100% 漏掉**，只有 token 数露馅。所以：
 
 ```python
-raw = msg.get("content") or ""
+raw = msg["content"] or ""
 if len(raw) > 50000 or raw.count(" ") / max(len(raw), 1) > 0.6 \
    or (usage_total_tokens > 3000 and len(raw) < 500):
     # 判定为空白刷屏 → 重试
 ```
 
-重试几乎免费（命中缓存后单次 0.6~1.0s）：**0 次→33%，1 次→11%，2 次→3.7%**。
-
 **铁律：任何视觉模型的输出健康检查，必须先量原始长度再做 strip。**
+
+## 九、刷屏的根因与根治（227 次受控实验结论）
+
+### 根因：不是"随机退化"，是「空格列对齐」失控
+
+刷屏产物是 **100% 纯空格**、长度恒为 ~247,592 字符 —— 因为模型在用空格做**列对齐**，
+对齐宽度算不出来时一路填到 max_tokens 截断。这也解释了为什么惩罚"重复空格"特别有效。
+若提示词里出现「**保持原始的行列结构**」这类要求，就会把它推上这条 40% 会失控的路。
+
+### 解法一（首选，零成本）：改提示词
+
+```
+❌ 逐字提取截图中的全部文字内容，尽量保持原始的行列结构和阅读顺序。不要翻译，不要补充说明。
+✅ 逐字提取截图中的全部文字内容，按从上到下、从左到右的阅读顺序逐行输出。不要翻译，不要补充说明。
+```
+
+删掉「保持原始的行列结构」→ 模型改用换行表达结构，失控路径直接消失。
+**实测 40% → 0%（15/15），不碰任何采样参数。**
+
+### 解法二（叠加，兼修重复字）：`repetition_penalty: 1.1`
+
+```json
+{ "temperature": 0.2, "top_p": 0.95, "top_k": 64, "repetition_penalty": 1.1 }
+```
+
+**实测 40% → 0%（15/15）**，且**额外修好「战戟→战战」这类重复 token 错误**（0/4 → 4/4）。
+代价：单次 1.3s → 1.9s。**1.05 强度不够（实测仍有 7%），1.1 是甜点，超过 1.2 会扭曲分布反而更糟。**
+
+### 实测参数对比（桌面 OCR，各 12~15 次）
+
+| 配置 | 刷屏率 | 备注 |
+|---|---|---|
+| 基线 `temp0.2 · rep1.0` | **40%** | 合并 22/57 ≈ 39% |
+| `temp1.0`（官方采样） | 8% | **不够**，单靠温度治不了 |
+| `rep 1.05` | 7% | 残留，强度不足 |
+| **`rep 1.1`** | **0%** | 推荐 |
+| `freq_pen 0.5` | 0% | 可用，1.6s 更快 |
+| `temp1.0 + rep1.1` | 0% | 可用但最慢（2.9s） |
+| `DRY 0.8` | 33% | ❌ **本环境无效** |
+| **提示词去"行列结构"** | **0%** | ✅ 零成本首选 |
+
+### ❌ DRY 采样器在 unsloth-studio 里不可用
+
+Unsloth 官方推荐用 DRY 替代重复惩罚，但**本环境参数被静默丢弃**。
+验证法：固定 `seed`，只改 `dry_multiplier`，两次输出**逐字节完全一致** → 未透传。
+
+原因：studio 的 OpenAI 兼容接口白名单只有
+`temperature / top_p / top_k / min_p / repetition_penalty / presence_penalty / frequency_penalty / seed`
+（`seed` 已验证生效）。要用 DRY 只能走加载期 `llama_extra_args`。
+
+### 兜底仍然必须有
+
+最优配置实测 0/27，但 **95% 置信上界约 11%** —— 不能声称绝对 0。
+保留健康检查 + 重试：命中缓存后重试一次仅 0.6~1.0s。
+
+### 同类断言参考
+
+Gemma 4 的非因果注意力架构除了 `n_ubatch`，还与 `--image-min-tokens` 冲突会触发
+`GGML_ASSERT` —— **不要传 `--image-min-tokens`**。上游追踪：`llama.cpp#21516`、
+`google-deepmind/gemma#622`。
 
 ### 精度 vs 速度的取舍（Gemma4-26B，原图）
 
 | 模式 | 平均耗时 | 精度 | 风险 |
 |---|---|---|---|
 | 开 thinking | 32.2s | 最高（商品页 OCR 全对） | 无刷屏 |
-| 关 thinking | 12.2s | 有错字（战戟→战战） | 33% 空白刷屏，需重试 |
+| 关 thinking + rep1.1 | 12.2s→略增 | 好（重复字也被修正） | 残余 <11%，需重试 |
 | 缩图 1024 + 关 thinking | 8.5s | 差（多字错读 + elements 拒答） | 无 |
+
 
