@@ -1,6 +1,6 @@
 ---
 name: unsloth-studio-vision-tuning
-description: 排查并调优 unsloth-studio 本地多模态（视觉）模型的部署参数。当出现"大图/高分辨率截图请求返回 HTTP 500"、"Could not reach an upstream service"、"llama-server 崩溃/SIGABRT"、加载参数未设置、上下文被压缩、输出重复循环/空白刷屏/大量空格等症状时使用。覆盖根因定位（n_ubatch 断言、空格对齐失控）、参数矩阵实测、崩溃报告与日志取证。
+description: 排查并调优 unsloth-studio 本地多模态（视觉）模型的部署参数。当出现"大图/高分辨率截图请求返回 HTTP 500"、"Could not reach an upstream service"、"llama-server 崩溃/SIGABRT"、加载参数未设置、上下文被压缩、输出重复循环/空白刷屏/纯空格/纯竖线空表格、401 Invalid or expired API key 等症状时使用。覆盖根因定位（n_ubatch 断言、空格与竖线两种"结构对齐失控"）、跨模型退化验证、参数矩阵实测、崩溃报告与日志取证。
 metadata:
   platforms: [macos, linux]
   requires: [python3, curl, unsloth-studio]
@@ -216,12 +216,13 @@ text = (msg["content"] or "").strip()   # ← 247K 空格被全部抹掉，输�
 
 ```python
 raw = msg["content"] or ""
-if len(raw) > 50000 or raw.count(" ") / max(len(raw), 1) > 0.6 \
-   or (usage_total_tokens > 3000 and len(raw) < 500):
-    # 判定为空白刷屏 → 重试
+junk = sum(1 for c in raw if c in " \t|")          # 空格 与 竖线 都要算
+if len(raw) > 2000 and junk / max(len(raw), 1) > 0.6:
+    # 判定为「结构对齐失控」→ 换提示词重试，或降级走备用模型
 ```
 
 **铁律：任何视觉模型的输出健康检查，必须先量原始长度再做 strip。**
+（阈值别用 5 万：Qwen 的退化产物是 `| | |`，同样会撞 token 上限，但**字符数可能只有 3071**。）
 
 ## 九、刷屏的根因与根治（227 次受控实验结论）
 
@@ -290,5 +291,126 @@ Gemma 4 的非因果注意力架构除了 `n_ubatch`，还与 `--image-min-token
 | 开 thinking | 32.2s | 最高（商品页 OCR 全对） | 无刷屏 |
 | 关 thinking + rep1.1 | 12.2s→略增 | 好（重复字也被修正） | 残余 <11%，需重试 |
 | 缩图 1024 + 关 thinking | 8.5s | 差（多字错读 + elements 拒答） | 无 |
+
+## 十、⚠️ 换模型后必须重新验证：退化不是 Gemma4 专属
+
+**2026-09-12 实测（6 图 × 6 维度 = 36 次矩阵 × 3 组配置）：Qwen3.6-35B-A3B 同样会「结构对齐失控」，**
+而且触发条件和产物都不一样，**不要假设换了模型就安全**。
+
+| 模型 | 退化产物 | 触发条件（实测） | 长度特征 |
+|---|---|---|---|
+| Gemma4-26B-A4B | 纯**空格**串 | 提示词含「保持原始的行列结构」 | ~247,592 字符 |
+| Qwen3.6-35B-A3B | 纯 `\|` 组成的**空 markdown 表格** | 提示词无触发词也会自发进入；**长连续正文 + 带表格样式的信息框/导航模板**页面 | 3071 字符（=2048 tok） |
+
+### Qwen 退化的三个关键性质（务必记住）
+
+1. **确定性，不是随机抖动**：3 次独立运行（含两个会话）输出长度完全一致；
+   **单纯重试不会自愈，必须换提示词或换参数。**
+2. **长度由 token 上限决定**：`max_tokens` 2048→4096，输出字符 3071→6143，
+   **精确 2.000 倍**，与图像内容无关 → 是纯粹循环失控，**提高 max_tokens 只会让它更长**。
+3. **两张不同图片产出逐字节相同的空表** → 模型内部的固定吸引子。
+
+### ✅ 通解：提示词显式封堵退化出口（首选）
+
+```
+❌ 不要输出表格结构，直接以纯文本逐行罗列文字。          → 无效，仍在退化（实测 2/6 格）
+✅ 禁止使用表格、Markdown 竖线（| 字符）或任何依靠空格对齐的排版，只输出纯文本行。
+                                                        → 生效（实测 0/6 格退化）
+```
+
+**关键：必须点名具体的退化符号（竖线 `|`、空格对齐）。含糊的「不要表格」拦不住它。**
+这条对 Gemma4 的「删掉行列结构」修复是同一原理 —— 拆掉通向列对齐的那条路。
+
+### ⚠️ `repetition_penalty` 对不同模型是双刃剑，不要照搬
+
+| | Gemma4 | Qwen3.6-35B |
+|---|---|---|
+| rep 1.0 | 提示词已修好时 **0 刷屏**（6/6 实测）→ 可用 | **2/6 格退化** |
+| rep 1.1 | 无副作用，顺带修重复字 → **推荐** | 修好退化，但**拖累正常格子** |
+
+Qwen 加 rep1.1 的代价（实测，T1_ocr 锚点命中率）：
+
+| Qwen T1_ocr 配置 | 命中率 | 退化格数 |
+|---|---|---|
+| rep1.0 标准提示词 | 61.5% | **2 / 6** |
+| rep1.1 标准提示词 | 67.1% | 0 |
+| **rep1.0 + 提示词禁表格/竖线** | **79.8%** | **0** |
+| rep1.0 + 弱表述「不要表格」 | 77.5% | 2 |
+
+原因：rep 是**全局**惩罚，中文长列表 OCR 天然充满重复字词，
+于是正常页面输出被提前截断（天气页 831 字 → 502 字，命中率 98% → 54%）；
+结构化抽取受损更重（统计局页 T4_json 100% → 12%）。
+**→ Qwen 侧「统一加 rep1.1」是净损失（修好 2 格，赔掉 5 格）。用提示词，不要用 rep。**
+
+## 十一、跨模型对比必测的工程指标（别只看精度）
+
+| 指标 | Gemma4-26B | Qwen3.6-35B | 影响 |
+|---|---|---|---|
+| 1280px 截图 **prompt token** | **~939** | **~1900~2163** | Qwen 的视觉 token 是 Gemma4 的 **2.0~2.3 倍** |
+| 4 槽位下可用上下文 | 58,368（每槽 14.6K） | 8,192（每槽 2,048）| ⚠️ **每槽装不下 Qwen 自己的图像 token** |
+| 平均响应（关 thinking，36 次） | 12.3s | 14.2~15.6s | Gemma4 快约 20% |
+
+**踩坑记录**：Qwen3.6-35B 用 `n_parallel=4` 加载后 studio 只给 8192 上下文
+→ 每槽 2048，而它单图就要 1900+ token，**加上输出必然溢出**。
+→ 视觉 token 大的模型**必须配 `n_parallel=1`**（或显式要更大的 `n_ctx`）。
+
+## 十二、环境与运维坑（本轮新增）
+
+### 12.1 API key 会随 studio 重启轮换
+
+现象：接口突然返回 `401 {"error":{"message":"Invalid or expired API key"}}`。
+
+```bash
+# 注意：/health 不是有效端点，永远 404，别拿它判断存活
+curl -s -o /dev/null -w "%{http_code}\n" "$BASE/health"     # → 404
+curl -s "$BASE/v1/models" -H "Authorization: Bearer $TOKEN" # → 401 说明 key 失效
+```
+
+**key 无法从磁盘还原**：`~/.unsloth/studio/auth/auth.db` 的 `api_keys` 表只存
+`key_prefix`（前 8 位十六进制）与 PBKDF2 哈希，不是明文也不是裸 sha256，**只能从 UI 重新复制**。
+
+```bash
+python3 -c "
+import sqlite3
+con=sqlite3.connect('file:$HOME/.unsloth/studio/auth/auth.db?mode=ro',uri=True)
+for r in con.execute('SELECT id,key_prefix,name,is_active,last_used_at FROM api_keys'): print(r)"
+```
+
+### 12.2 `/v1/load` 会阻塞到加载完成；`loaded` 是列表不是布尔
+
+```bash
+# 错：永远匹配不上，白等 60 轮
+echo "$out" | grep -q "loaded=True" && break
+# 对：status 返回的 loaded / loading 都是数组
+python3 -c "import json;d=json.load(open('/tmp/st.json'),strict=False);\
+print(d['loaded'], d['loading'])"   # → ['model-id']  []
+```
+
+`/v1/load` 的 HTTP 响应本身要等到加载结束才返回（35B Q4_K_M 约 8~14 min，含 mmproj）。
+**改从 `/api/inference/status` 轮询，不要死等 load 响应。**
+
+### 12.3 无头 Chrome 整屏截图：写盘即杀
+
+`--headless=new --screenshot` **截完不退出**，脚本会卡死。必须自己盯文件：
+
+```bash
+"$CHROME" --headless=new --disable-gpu --no-sandbox --hide-scrollbars \
+  --user-data-dir=/tmp/chrome_prof --window-size=1280,1700 \
+  --virtual-time-budget=12000 --screenshot=/tmp/x.png "$URL" >/tmp/x.log 2>&1 &
+cpid=$!
+for i in $(seq 1 45); do sleep 1; [ -f /tmp/x.png ] && break; done
+sleep 2; kill -9 $cpid 2>/dev/null; pkill -9 -f "user-data-dir=/tmp/chrome_prof"
+```
+
+**抓不到页面的类型**：重 JS / 长连接站点（实测 `quote.eastmoney.com` 反复失败，即便把
+budget 提到 20s），换站点即可；**能抓到的**：维基百科、GitHub、stats.gov.cn、
+finance.sina.com.cn、weather.com.cn。
+热门站点有反爬（百度百科 / 知乎 / 贴吧 curl 直接 403），但**用 Chrome 渲染通常能过**。
+
+### 12.4 评测脚本的两个必备开关
+
+- `--append` / 增量落盘：每跑完一格就写 JSON，长矩阵中断不丢数据。
+- **输出预算要显式设**：默认 `max_tokens` 太小会把「能力差异」和「预算差异」混在一起。
+  必须先跑一遍同预算的公平矩阵，再单独跑高预算对照。
 
 
