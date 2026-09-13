@@ -24,6 +24,25 @@ metadata:
 
 ---
 
+## Step -1 — 前置自检（先做，失败即止）
+
+**别急着写文案，先确认工具真的能调。** 这一步不通过，后面全是白费功夫。
+
+1. `ToolSearch` 精确名查 `mcp__chrome-devtools__list_pages`。**查不到就直接停**，如实报告跳过，
+   不要靠猜、不要改用别的浏览器工具硬上（登录态在用户的 Chrome 里，换工具等于换浏览器）。
+2. `list_pages` 拿不到 X 页面：`new_page` 打开 `https://x.com/home`，看是否落在登录态。
+3. **Chrome 进程在跑 ≠ MCP 工具可用。** 实测过的坑：Chrome 主进程 + `chrome-devtools-mcp --autoConnect`
+   辅助进程都在跑，但工具根本没注册进当前会话，`ToolSearch` 精确名和关键词搜索都搜不到。
+   判断依据只有一条——**工具能不能调**，不是进程在不在。
+
+### 无人值守 / 定时任务场景（重要）
+
+自动化的 prompt 里通常已经写死了语言、形式、审核要求，且**不允许调用 `AskUserQuestion`**。
+此时：**跳过 Step 0 的交互确认**，直接采用任务提示里的预设值，并在最终汇报里
+**明确声明所用的默认值**（语言 / 形式 / 角度），让用户事后能核对。
+
+---
+
 ## Step 0 — 发布前必须确认（不可跳过）
 
 发推是**不可逆的公开操作**，属"对外操作先问再做"。用 `AskUserQuestion` 一次问清三项：
@@ -331,6 +350,7 @@ new_page { url: "https://x.com/<screen_name>/status/<首条ID>", isolatedContext
 
 | 现象 | 原因 | 处理 |
 |------|------|------|
+| `ToolSearch` 搜不到 `mcp__chrome-devtools__*` | 工具未注册进当前会话（跟进程在不在无关） | 见 Step -1，直接停止并如实报告，不要硬试 |
 | `click` 返回成功但没发出去 | 工具空点 / uid 失效 | 改用 Step 3.3 的 `evaluate_script` 点击 |
 | 无 CreateTweet 请求 | 同上，未触发提交 | 同上；回读编辑器确认文案是否还在 |
 | 编辑框取到 `"\n"` 空值 | 内容已随发帖清空 | 说明**发布成功**，去 Step 4 取 ID |
