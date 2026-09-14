@@ -58,6 +58,25 @@ metadata:
 
 ---
 
+## Step 0.5 — 取站点真实数据（不依赖浏览器）
+
+写文案前要引用的数字（收录条数等）**不用开浏览器也能取**，而且比读首页更可靠：
+
+```bash
+curl -s "https://prompts.hhxxttxs.icu/zh/api/prompts?limit=1"
+# 响应 JSON：{ items: [...], total: 5434, page, pageSize, hasMore }
+#   → total 就是实时收录条数
+```
+
+- 首页 hero 文案里写死的「收录 3258+ 条」是过时静态文案，**不要照抄**，以 `total` 为准。
+- `GET /zh/api/categories` **不是接口**（返回 Next.js 页面 HTML），别拿它取分类数。
+- 实测值：2026-09-13 / 09-14 均为 `total = 5434`。
+
+> 取数走 HTTP，发帖走 chrome-devtools MCP —— 两者独立。**MCP 不可用时取数仍然做得了**，
+> 但没 MCP 就发不了帖，见 Step -1。
+
+---
+
 ## Step 1 — 文案撰写规则（踩过坑，务必遵守）
 
 ### 1.1 X 编辑器会吃掉换行
